@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+  <log4net>
+    <appender name="DebugLogDailyAppender" type="log4net.Appender.RollingFileAppender">
+      <!-- ログ・ファイル名の先頭部分 -->
+      <param name="File" value=".\log\unity.log" />
+       <!-- ログ・ファイル名が固定ではないので“false”を指定 -->
+      <param name="StaticLogFileName" value="true" />
+      <!-- 追加書き込み -->
+      <param name="AppendToFile" value="true" />
+      
+      <!-- 全てのログ・レベルとする -->
+      <filter type="log4net.Filter.LevelRangeFilter">
+         <param name="LevelMax" value="FATAL" />
+         <param name="LevelMin" value="DEBUG" />
+      </filter>
+      
+      <!-- rollingStyle がSizeまたはCompositeの時の最大ファイルサイズ -->
+      <param name="MaximumFileSize" value="1MB" />
+      <!-- ファイルを切替えるマックス数。ここでは3世代まで管理する -->
+      <param name="MaxSizeRollBackups" value="2" />
+      
+      <!-- ログの出力書式 -->
+      <layout type="log4net.Layout.PatternLayout">
+        <ConversionPattern value="%date %message%n" />
+      </layout>
+    </appender>
+    <root>
+      <!-- デバッグ以上のログを出力したい場合 <level value="Debug" /> -->
+      <level value="INFO" />
+      <!-- どのログ出力先を使用するか -->
+      <appender-ref ref="DebugLogDailyAppender" />
+    </root>
+  </log4net>
+</configuration>
