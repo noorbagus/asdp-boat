@@ -2,133 +2,126 @@ using UnityEngine;
 
 public class CameraFollow : MonoBehaviour
 {
-    [Header("Target Settings")]
-    [SerializeField] private Transform target;
-    [SerializeField] private Vector3 offset = new Vector3(0f, 3f, -5f);
-    
-    [Header("Follow Settings")]
-    [SerializeField] private float smoothSpeed = 5f;
-    [SerializeField] private float rotationSmooth = 2f;
-    [SerializeField] private bool followRotation = false;
-    [SerializeField] private bool lookAtTarget = true;
-    
-    [Header("Advanced Settings")]
-    [SerializeField] private float minDistance = 3f;
-    [SerializeField] private float maxDistance = 10f;
-    [SerializeField] private float heightDamping = 2f;
-    
-    private Vector3 currentVelocity;
-    
-    private void Start()
-    {
-        // If no target is specified, try to find the player
-        if (target == null)
-        {
-            GameObject player = GameObject.FindGameObjectWithTag("Player");
-            if (player != null)
-            {
-                target = player.transform;
-            }
-            else
-            {
-                Debug.LogWarning("Camera Follow: No target assigned and no Player tag found");
-            }
-        }
-        
-        // Set initial position
-        if (target != null)
-        {
-            transform.position = target.position + offset;
-            
-            if (lookAtTarget)
-            {
-                transform.LookAt(target);
-            }
-        }
-    }
-    
-    private void LateUpdate()
-    {
-        if (target == null) return;
-        
-        // Calculate the desired position
-        Vector3 desiredPosition = CalculateDesiredPosition();
-        
-        // Smoothly move the camera
-        transform.position = Vector3.SmoothDamp(transform.position, desiredPosition, ref currentVelocity, 1f / smoothSpeed);
-        
-        // Handle rotation
-        if (followRotation)
-        {
-            // Smoothly rotate to match target's rotation
-            Quaternion desiredRotation = Quaternion.Euler(0, target.eulerAngles.y, 0);
-            transform.rotation = Quaternion.Slerp(transform.rotation, desiredRotation, rotationSmooth * Time.deltaTime);
-        }
-        else if (lookAtTarget)
-        {
-            // Simply look at the target
-            transform.LookAt(target);
-        }
-    }
-    
-    private Vector3 CalculateDesiredPosition()
-    {
-        // Calculate position based on target position and offset
-        Vector3 desiredPosition = target.position + offset;
-        
-        // Apply any additional positioning logic here
-        
-        return desiredPosition;
-    }
-    
-    // Methods to adjust camera settings at runtime
-    
-    public void SetTarget(Transform newTarget)
-    {
-        target = newTarget;
-    }
-    
-    public void SetOffset(Vector3 newOffset)
-    {
-        offset = newOffset;
-    }
-    
-    public void SetSmoothSpeed(float newSpeed)
-    {
-        smoothSpeed = newSpeed;
-    }
-    
-    public void EnableRotationFollow(bool enable)
-    {
-        followRotation = enable;
-    }
-    
-    // Method to shake the camera (useful for impacts)
-    public void ShakeCamera(float intensity = 0.5f, float duration = 0.5f)
-    {
-        StartCoroutine(DoCameraShake(intensity, duration));
-    }
-    
-    private System.Collections.IEnumerator DoCameraShake(float intensity, float duration)
-    {
-        Vector3 originalPosition = transform.localPosition;
-        float elapsed = 0.0f;
-        
-        while (elapsed < duration)
-        {
-            float x = Random.Range(-1f, 1f) * intensity;
-            float y = Random.Range(-1f, 1f) * intensity;
-            
-            transform.localPosition = new Vector3(
-                originalPosition.x + x,
-                originalPosition.y + y,
-                originalPosition.z
-            );
-            
-            elapsed += Time.deltaTime;
-            yield return null;
-        }
-        
-        transform.localPosition = originalPosition;
-    }
+   [Header("Target Settings")]
+   [SerializeField] private Transform target;
+   [SerializeField] private Vector3 offset = new Vector3(0f, 3f, -7f); // Lebih tinggi
+   
+   [Header("Follow Settings")]
+   [SerializeField] private float smoothSpeed = 3f;
+   [SerializeField] private float rotationSpeed = 2f;
+   
+   [Header("Camera Facing")]
+   [SerializeField] private bool faceFront = true;
+   [SerializeField] private KeyCode toggleViewKey = KeyCode.C;
+   
+   [Header("Look Settings")]
+   [SerializeField] private bool lookAtHorizon = true;
+   [SerializeField] private float lookUpOffset = 2f; // Positif = lihat ke atas
+   
+   [Header("Rotation Axis")]
+   [SerializeField] private bool useXRotation = false;
+   [SerializeField] private bool useYRotation = true;
+   [SerializeField] private bool useZRotation = false;
+   [SerializeField] private bool invertRotation = false;
+   
+   private float initialYRotation;
+   private bool hasInitialRotation = false;
+   
+   private void Start()
+   {
+       if (target != null && !hasInitialRotation)
+       {
+           initialYRotation = target.eulerAngles.y;
+           hasInitialRotation = true;
+       }
+   }
+   
+   private void Update()
+   {
+       // Toggle camera view with input
+       if (Input.GetKeyDown(toggleViewKey))
+       {
+           faceFront = !faceFront;
+       }
+   }
+   
+   private void LateUpdate()
+   {
+       if (target == null) return;
+       
+       // Ambil posisi boat
+       Vector3 boatPosition = target.position;
+       
+       // Ambil rotasi dasar
+       float currentRotation = 0f;
+       if (useXRotation) currentRotation = target.eulerAngles.x;
+       else if (useYRotation) currentRotation = target.eulerAngles.y;
+       else if (useZRotation) currentRotation = target.eulerAngles.z;
+       
+       // Invert rotation jika dicentang
+       if (invertRotation) currentRotation = -currentRotation;
+       
+       // Tambahkan 180 derajat jika kamera menghadap ke depan
+       if (faceFront && useYRotation)
+       {
+           currentRotation += 180f;
+       }
+       
+       // Hitung posisi camera berdasarkan offset dan rotasi
+       Vector3 rotatedOffset = Vector3.zero;
+       Quaternion targetRotation = Quaternion.identity;
+       
+       if (useXRotation)
+       {
+           rotatedOffset = Quaternion.Euler(currentRotation, 0, 0) * offset;
+           targetRotation = Quaternion.Euler(currentRotation, 0, 0);
+       }
+       else if (useYRotation)
+       {
+           rotatedOffset = Quaternion.Euler(0, currentRotation, 0) * offset;
+           targetRotation = Quaternion.Euler(0, currentRotation, 0);
+       }
+       else if (useZRotation)
+       {
+           rotatedOffset = Quaternion.Euler(0, 0, currentRotation) * offset;
+           targetRotation = Quaternion.Euler(0, 0, currentRotation);
+       }
+       else
+       {
+           rotatedOffset = offset;
+           targetRotation = transform.rotation;
+       }
+       
+       Vector3 desiredPosition = boatPosition + rotatedOffset;
+       
+       // Smooth position following
+       transform.position = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed * Time.deltaTime);
+       
+       // Kalkulasi target untuk look at
+       if (lookAtHorizon)
+       {
+           // Target titik untuk melihat ke horizon
+           Vector3 lookTarget = target.position;
+           
+           // Gunakan forward direction untuk menentukan arah horizon
+           Vector3 forwardDir = faceFront ? -target.forward : target.forward;
+           
+           // Jarak pandang ke depan (biar tidak melihat ke boat)
+           lookTarget += forwardDir * 20f;
+           
+           // Tambahkan offset vertikal (positif untuk melihat ke atas)
+           lookTarget.y += lookUpOffset;
+           
+           // Arahkan kamera ke horizon
+           transform.LookAt(lookTarget);
+       }
+       else
+       {
+           // Smooth rotation - gunakan cara original
+           transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
+           
+           // Pastikan kamera selalu melihat ke target
+           transform.LookAt(target);
+       }
+   }
 }

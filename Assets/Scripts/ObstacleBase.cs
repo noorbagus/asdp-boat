@@ -48,7 +48,7 @@ public abstract class ObstacleBase : MonoBehaviour
     protected virtual void HandlePlayerCollision(Collision collision)
     {
         // Get player's game manager
-        GameManager gameManager = GameManager.Instance;
+        GameManager gameManager = FindObjectOfType<GameManager>();
         if (gameManager != null)
         {
             gameManager.TakeDamage(damageAmount);
@@ -81,5 +81,11 @@ public abstract class ObstacleBase : MonoBehaviour
         {
             audioSource.PlayOneShot(collisionSound);
         }
+    }
+    
+    // Accessor for damage amount
+    public int GetDamageAmount()
+    {
+        return damageAmount;
     }
 }
