@@ -24,6 +24,14 @@ public class BoatController : MonoBehaviour
     [SerializeField] private float rotationSpeed = 5f;      // Speed of rotation
     [SerializeField] private float autoStraightenDelay = 2f; // Time before auto-straighten
     [SerializeField] private bool enableAutoStraighten = true;
+    [SerializeField] private bool enableSmoothCurve = true;  // Enable smooth curve interpolation
+    [SerializeField] private AnimationCurve turnCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+    [SerializeField] private Vector3 rotationPivotOffset = Vector3.zero; // Adjust rotation center
+
+    [Header("Smooth Rotation")]
+    [SerializeField] private bool useSmoothedRotation = true;
+    [SerializeField] private float rotationSmoothing = 8f;  // Higher = more responsive
+    [SerializeField] private float maxRotationSpeed = 120f; // Max degrees/second
 
     [Header("Boat Properties")]
     [SerializeField] private float forwardSpeed = 0.0f;      // Initial speed (now 0)
@@ -80,6 +88,13 @@ public class BoatController : MonoBehaviour
     private float currentRotationY = 0f;
     private float lastTurnTime = 0f;
     private bool isRotating = false;
+    private float turnProgress = 0f;      // Progress of current turn (0-1)
+    private float startRotationY = 0f;    // Starting rotation for smooth curve
+
+    // Private variables untuk smooth rotation
+    private float targetRotationVelocity = 0f;
+    private float currentRotationVelocity = 0f;
+    private float inputDecay = 4f; // How fast input fades
     
     // Paddle stroke structure
     private struct PaddleStroke
@@ -306,6 +321,13 @@ public class BoatController : MonoBehaviour
             return;
         }
 
+        // Set smooth rotation velocity
+        if (useSmoothedRotation)
+        {
+            targetRotationVelocity = -maxRotationSpeed; // Negative = left turn
+            lastTurnTime = Time.time;
+        }
+
         // Record this paddle stroke
         RecordPaddleStroke(true);
         DebugLog("Left paddle stroke recorded");
@@ -324,6 +346,7 @@ public class BoatController : MonoBehaviour
         StartCoroutine(LeftPaddleCooldown());
     }
 
+
     // Called from BluetoothReceiver when "R:1" is received or from keyboard input
     public void PaddleRight()
     {
@@ -333,6 +356,13 @@ public class BoatController : MonoBehaviour
         {
             DebugLog("PaddleRight() aborted - cooldown active");
             return;
+        }
+
+        // Set smooth rotation velocity
+        if (useSmoothedRotation)
+        {
+            targetRotationVelocity = maxRotationSpeed; // Positive = right turn
+            lastTurnTime = Time.time;
         }
 
         // Record this paddle stroke
@@ -438,35 +468,102 @@ public class BoatController : MonoBehaviour
     // Smooth rotation handling
     private void UpdateRotation()
     {
-        // Smoothly rotate towards target
-        currentRotationY = Mathf.LerpAngle(currentRotationY, targetRotationY, rotationSpeed * Time.deltaTime);
-        transform.rotation = Quaternion.Euler(transform.eulerAngles.x, currentRotationY, transform.eulerAngles.z);
-        
-        // Check if rotation is complete
-        if (Mathf.Abs(Mathf.DeltaAngle(currentRotationY, targetRotationY)) < 1f)
+        if (useSmoothedRotation)
         {
-            isRotating = false;
-        }
-        
-        // Auto-straighten after delay
-        if (enableAutoStraighten && !isRotating && Time.time - lastTurnTime > autoStraightenDelay)
-        {
-            float straightAngle = 0f; // Assuming 0 is straight forward
-            if (Mathf.Abs(Mathf.DeltaAngle(targetRotationY, straightAngle)) > 5f)
+            // Decay input over time
+            targetRotationVelocity = Mathf.Lerp(targetRotationVelocity, 0f, inputDecay * Time.deltaTime);
+            
+            // Smooth the velocity
+            currentRotationVelocity = Mathf.Lerp(currentRotationVelocity, targetRotationVelocity, 
+                                                rotationSmoothing * Time.deltaTime);
+            
+            // Apply rotation with pivot support
+            float rotationThisFrame = currentRotationVelocity * Time.deltaTime;
+            if (rotationPivotOffset != Vector3.zero)
             {
-                targetRotationY = Mathf.LerpAngle(targetRotationY, straightAngle, Time.deltaTime * 0.5f);
-                DebugLog("Auto-straightening boat rotation");
+                Vector3 pivotWorldPos = transform.position + transform.TransformDirection(rotationPivotOffset);
+                transform.RotateAround(pivotWorldPos, Vector3.up, rotationThisFrame);
+            }
+            else
+            {
+                transform.Rotate(0, rotationThisFrame, 0);
+            }
+            
+            // Update tracking
+            currentRotationY = transform.eulerAngles.y;
+            
+            // Auto-straighten when no input and after delay
+            if (enableAutoStraighten && Mathf.Abs(targetRotationVelocity) < 5f && 
+                Time.time - lastTurnTime > autoStraightenDelay)
+            {
+                float currentY = transform.eulerAngles.y;
+                if (currentY > 180f) currentY -= 360f; // Convert to -180 to 180 range
+                
+                float straightenForce = -currentY * 0.8f; // Proportional force towards 0
+                targetRotationVelocity += straightenForce * Time.deltaTime;
             }
         }
+        else
+        {
+            // Original rotation code
+            if (isRotating)
+            {
+                turnProgress += rotationSpeed * Time.deltaTime;
+                turnProgress = Mathf.Clamp01(turnProgress);
+                
+                if (enableSmoothCurve)
+                {
+                    float curveValue = turnCurve.Evaluate(turnProgress);
+                    currentRotationY = Mathf.LerpAngle(startRotationY, targetRotationY, curveValue);
+                }
+                else
+                {
+                    currentRotationY = Mathf.LerpAngle(currentRotationY, targetRotationY, rotationSpeed * Time.deltaTime);
+                }
+                
+                ApplyRotationAroundPivot();
+                
+                if (turnProgress >= 1f || Mathf.Abs(Mathf.DeltaAngle(currentRotationY, targetRotationY)) < 1f)
+                {
+                    isRotating = false;
+                    currentRotationY = targetRotationY;
+                    ApplyRotationAroundPivot();
+                }
+            }
+            else
+            {
+                if (enableAutoStraighten && Time.time - lastTurnTime > autoStraightenDelay)
+                {
+                    float straightAngle = 0f;
+                    if (Mathf.Abs(Mathf.DeltaAngle(targetRotationY, straightAngle)) > 5f)
+                    {
+                        targetRotationY = Mathf.LerpAngle(targetRotationY, straightAngle, Time.deltaTime * 0.1f);
+                        ApplyRotationAroundPivot();
+                    }
+                }
+            }
+        }
+    }
+
+    
+    // Apply rotation around custom pivot point
+    private void ApplyRotationAroundPivot()
+    {
+        Vector3 pivotWorldPos = transform.position + transform.TransformDirection(rotationPivotOffset);
+        transform.RotateAround(pivotWorldPos, Vector3.up, currentRotationY - transform.eulerAngles.y);
     }
     
     // Turn left effect (smooth rotation)
     private void TurnLeft()
     {
         DebugLog("Executing smooth turn left");
+        
+        // Store starting rotation for smooth curve
+        startRotationY = currentRotationY;
         targetRotationY -= turnAngle;
         lastTurnTime = Time.time;
         isRotating = true;
+        turnProgress = 0f;
         
         // Optional: Keep rigidbody physics for water interaction
         if (boatRb != null)
@@ -479,9 +576,13 @@ public class BoatController : MonoBehaviour
     private void TurnRight()
     {
         DebugLog("Executing smooth turn right");
+        
+        // Store starting rotation for smooth curve
+        startRotationY = currentRotationY;
         targetRotationY += turnAngle;
         lastTurnTime = Time.time;
         isRotating = true;
+        turnProgress = 0f;
         
         // Optional: Keep rigidbody physics for water interaction
         if (boatRb != null)
