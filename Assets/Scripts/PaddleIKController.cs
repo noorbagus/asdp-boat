@@ -1,6 +1,6 @@
 using UnityEngine;
 
-public class ImprovedPaddleController : MonoBehaviour
+public class PaddleIKController : MonoBehaviour
 {
     [Header("References")]
     public Transform paddle;
