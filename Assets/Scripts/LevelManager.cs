@@ -3,265 +3,484 @@ using System.Collections.Generic;
 
 public class LevelManager : MonoBehaviour
 {
-    [Header("Level Settings")]
-    [SerializeField] private float levelLength = 300f; // Length of level in meters
-    [SerializeField] private float levelWidth = 10f; // Width of navigable channel
-    [SerializeField] private Transform startPoint;
-    [SerializeField] private Transform endPoint;
+    [Header("Level Bounds")]
+    [SerializeField] private Transform boatStartPosition;
+    [SerializeField] private Transform finishPoint;
+    [SerializeField] private float channelWidth = 10f;
+    [SerializeField] private float levelLength = 120f;
     
-    [Header("Obstacle Settings")]
+    [Header("Fixed Spawn Area")]
+    [SerializeField] private Vector3 spawnAreaCenter = Vector3.zero;
+    [SerializeField] private Vector3 spawnAreaSize = new Vector3(100f, 1f, 100f);
+    [SerializeField] private bool useFixedSpawnArea = true;
+    
+    [Header("Manual References")]
+    [SerializeField] private Suimono.Core.SuimonoModule manualSuimonoModule;
+    [SerializeField] private Suimono.Core.SuimonoObject manualWaterSurface;
+    
+    [Header("Water Integration")]
+    [SerializeField] private bool autoDetectWaterBounds = false;
+    [SerializeField] private float finishIslandRadius = 15f;
+    [SerializeField] private Vector2 finishOffset = new Vector2(0.8f, 0f);
+    
+    [Header("Obstacles")]
     [SerializeField] private GameObject[] obstaclePrefabs;
     [SerializeField] private int minObstacles = 3;
     [SerializeField] private int maxObstacles = 6;
-    [SerializeField] private float minObstacleSpacing = 30f;
+    [SerializeField] private float minObstacleSpacing = 15f;
     
-    [Header("Treasure Settings")]
+    [Header("Whale Spawn Settings")]
+    [SerializeField] private float whaleSpawnMinDistance = 30f;
+    [SerializeField] private float whaleSpawnMaxDistance = 80f;
+    [SerializeField] private float whaleLateralSpread = 20f;
+    
+    [Header("Treasures")]
     [SerializeField] private GameObject treasurePrefab;
     [SerializeField] private int minTreasures = 5;
     [SerializeField] private int maxTreasures = 8;
     [SerializeField] private int[] treasureValues = { 50, 100 };
     
-    [Header("Boundary Settings")]
-    [SerializeField] private GameObject boundaryPrefab;
-    [SerializeField] private float boundaryHeight = 2f;
+    [Header("Movement Settings")]
+    [SerializeField] private float patrolDistance = 8f;
+    [SerializeField] private float moveSpeed = 1f;
+    [SerializeField] private bool enableMovement = true;
     
-    private List<GameObject> levelObjects = new List<GameObject>();
+    [Header("Spawn Settings")]
+    [SerializeField] private bool useRandomDistribution = true;
+    [SerializeField] private float minSpacing = 8f;
+    [SerializeField] private float spawnMargin = 10f;
+    
+    [Header("Debug")]
+    [SerializeField] private bool enableDebugLogs = true;
+    [SerializeField] private bool showGizmos = true;
+    
+    // Runtime data
+    private List<GameObject> spawnedObstacles = new List<GameObject>();
+    private List<GameObject> spawnedTreasures = new List<GameObject>();
+    private List<Vector3> usedPositions = new List<Vector3>();
+    private Bounds waterBounds;
+    private Suimono.Core.SuimonoModule suimonoModule;
+    private int totalPossibleScore = 0;
     
     private void Awake()
     {
-        // If we need to generate the level on startup
-        if (startPoint != null && endPoint != null)
+        InitializeWaterBounds();
+        
+        if (autoDetectWaterBounds)
         {
-            GenerateLevel();
+            AutoPositionFinishPoint();
         }
+    }
+    
+    private void Start()
+    {
+        GenerateLevel();
+    }
+    
+    private void InitializeWaterBounds()
+    {
+        // Try to find Suimono module
+        if (manualSuimonoModule != null)
+        {
+            suimonoModule = manualSuimonoModule;
+            DebugLog("Using manual Suimono module reference");
+        }
+        else
+        {
+            suimonoModule = FindObjectOfType<Suimono.Core.SuimonoModule>();
+            if (suimonoModule == null)
+            {
+                GameObject suimonoObj = GameObject.Find("SUIMONO_Module");
+                if (suimonoObj != null)
+                {
+                    suimonoModule = suimonoObj.GetComponent<Suimono.Core.SuimonoModule>();
+                }
+            }
+            DebugLog($"Auto-found Suimono module: {suimonoModule != null}");
+        }
+        
+        // Auto-detect boat if not assigned
+        if (boatStartPosition == null)
+        {
+            BoatController boat = FindObjectOfType<BoatController>();
+            if (boat != null)
+            {
+                boatStartPosition = boat.transform;
+                DebugLog($"Auto-detected boat at: {boatStartPosition.position}");
+            }
+            else
+            {
+                DebugLog("WARNING: No boat start position found!");
+            }
+        }
+        
+        // Always use fixed bounds for consistent spawning
+        SetFixedWaterBounds();
+    }
+    
+    private void SetFixedWaterBounds()
+    {
+        waterBounds = new Bounds(spawnAreaCenter, spawnAreaSize);
+        DebugLog($"Fixed water bounds set: Center={spawnAreaCenter}, Size={spawnAreaSize}");
+    }
+    
+    private void AutoPositionFinishPoint()
+    {
+        if (finishPoint == null) return;
+        
+        Vector3 newFinishPos = new Vector3(
+            waterBounds.min.x + (waterBounds.size.x * finishOffset.x),
+            0f,
+            waterBounds.min.z + (waterBounds.size.z * (0.5f + finishOffset.y))
+        );
+        
+        finishPoint.position = newFinishPos;
+        DebugLog($"Auto-positioned finish point at: {newFinishPos}");
     }
     
     public void GenerateLevel()
     {
-        // Clear any existing level objects
         ClearLevel();
         
-        // Calculate level direction
-        Vector3 levelDirection = (endPoint.position - startPoint.position).normalized;
-        levelDirection.y = 0; // Keep level horizontal
+        DebugLog($"Starting level generation with bounds: {waterBounds}");
         
-        // Create boundaries
-        CreateBoundaries();
-        
-        // Spawn obstacles
         SpawnObstacles();
-        
-        // Spawn treasures
         SpawnTreasures();
-    }
-    
-    private void CreateBoundaries()
-    {
-        if (boundaryPrefab == null || startPoint == null || endPoint == null) return;
         
-        // Calculate level direction and perpendicular
-        Vector3 levelDirection = (endPoint.position - startPoint.position).normalized;
-        levelDirection.y = 0;
-        Vector3 levelPerpendicular = new Vector3(levelDirection.z, 0, -levelDirection.x);
-        
-        // Create left boundary
-        Vector3 leftStart = startPoint.position + levelPerpendicular * (levelWidth * 0.5f);
-        Vector3 leftEnd = endPoint.position + levelPerpendicular * (levelWidth * 0.5f);
-        CreateBoundaryWall(leftStart, leftEnd);
-        
-        // Create right boundary
-        Vector3 rightStart = startPoint.position - levelPerpendicular * (levelWidth * 0.5f);
-        Vector3 rightEnd = endPoint.position - levelPerpendicular * (levelWidth * 0.5f);
-        CreateBoundaryWall(rightStart, rightEnd);
-    }
-    
-    private void CreateBoundaryWall(Vector3 start, Vector3 end)
-    {
-        if (boundaryPrefab == null) return;
-        
-        // Calculate direction and length
-        Vector3 direction = (end - start).normalized;
-        float length = Vector3.Distance(start, end);
-        
-        // Calculate center position
-        Vector3 center = (start + end) * 0.5f;
-        
-        // Create wall object
-        GameObject wall = Instantiate(boundaryPrefab, center, Quaternion.identity);
-        wall.transform.parent = transform;
-        
-        // Scale the wall to match length
-        wall.transform.localScale = new Vector3(1f, boundaryHeight, length);
-        
-        // Rotate to face correct direction
-        float angle = Mathf.Atan2(direction.z, direction.x) * Mathf.Rad2Deg;
-        wall.transform.rotation = Quaternion.Euler(0, angle, 0);
-        
-        // Add to level objects
-        levelObjects.Add(wall);
+        DebugLog($"Level generated - Obstacles: {spawnedObstacles.Count}, Treasures: {spawnedTreasures.Count}, Total Score: {totalPossibleScore}");
     }
     
     private void SpawnObstacles()
     {
-        if (obstaclePrefabs == null || obstaclePrefabs.Length == 0) return;
-        
-        // Calculate level direction and length
-        Vector3 levelDirection = (endPoint.position - startPoint.position).normalized;
-        float length = Vector3.Distance(startPoint.position, endPoint.position);
-        Vector3 levelPerpendicular = new Vector3(levelDirection.z, 0, -levelDirection.x);
-        
-        // Determine number of obstacles
-        int numObstacles = Random.Range(minObstacles, maxObstacles + 1);
-        
-        // Track used positions to prevent overlap
-        List<Vector3> usedPositions = new List<Vector3>();
-        
-        // Spawn obstacles
-        for (int i = 0; i < numObstacles; i++)
+        if (obstaclePrefabs == null || obstaclePrefabs.Length == 0) 
         {
-            // Select random obstacle prefab
+            DebugLog("ERROR: No obstacle prefabs assigned!");
+            return;
+        }
+        
+        int obstacleCount = Random.Range(minObstacles, maxObstacles + 1);
+        DebugLog($"Attempting to spawn {obstacleCount} obstacles");
+        
+        int successfulSpawns = 0;
+        
+        for (int i = 0; i < obstacleCount; i++)
+        {
             GameObject obstaclePrefab = obstaclePrefabs[Random.Range(0, obstaclePrefabs.Length)];
+            Vector3 spawnPos = GetPredictiveSpawnPosition(obstaclePrefab);
             
-            // Calculate position along path
-            float distanceAlongPath = Random.Range(length * 0.2f, length * 0.8f); // Avoid start/end
-            float offsetFromCenter = Random.Range(-levelWidth * 0.3f, levelWidth * 0.3f); // Not too close to boundaries
-            
-            Vector3 position = startPoint.position + (levelDirection * distanceAlongPath) + (levelPerpendicular * offsetFromCenter);
-            
-            // Check for minimum spacing between obstacles
-            bool validPosition = true;
-            foreach (Vector3 usedPos in usedPositions)
+            if (spawnPos == Vector3.zero) 
             {
-                if (Vector3.Distance(position, usedPos) < minObstacleSpacing)
-                {
-                    validPosition = false;
-                    break;
-                }
-            }
-            
-            // Skip if invalid position
-            if (!validPosition)
-            {
-                // Try again (reduce i to retry)
-                i--;
+                DebugLog($"Failed to find spawn position for obstacle {i + 1}");
                 continue;
             }
             
-            // Spawn obstacle
-            GameObject obstacle = Instantiate(obstaclePrefab, position, Quaternion.identity);
-            obstacle.transform.parent = transform;
-            
-            // Random rotation
-            float yRotation = Random.Range(0f, 360f);
-            obstacle.transform.rotation = Quaternion.Euler(0, yRotation, 0);
-            
-            // Add to lists
-            levelObjects.Add(obstacle);
-            usedPositions.Add(position);
+            try
+            {
+                GameObject obstacle = Instantiate(obstaclePrefab, spawnPos, GetRandomRotation());
+                obstacle.transform.parent = transform;
+                
+                if (enableMovement)
+                {
+                    SetupObstacleMovement(obstacle);
+                }
+                
+                spawnedObstacles.Add(obstacle);
+                usedPositions.Add(spawnPos);
+                successfulSpawns++;
+                
+                DebugLog($"Successfully spawned obstacle {obstacle.name} at {spawnPos}");
+            }
+            catch (System.Exception e)
+            {
+                DebugLog($"Error spawning obstacle: {e.Message}");
+            }
         }
+        
+        DebugLog($"Total obstacles spawned: {successfulSpawns}/{obstacleCount}");
+    }
+    
+    private Vector3 GetPredictiveSpawnPosition(GameObject prefab)
+    {
+        if (boatStartPosition == null) return Vector3.zero;
+        
+        bool isWhale = prefab.GetComponent<WhaleObstacle>() != null;
+        int maxAttempts = 100;
+        float minSpacingToUse = isWhale ? minObstacleSpacing : minSpacing;
+        
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            Vector3 spawnPos;
+            
+            if (isWhale)
+            {
+                // Spawn whales ahead of boat path
+                Vector3 boatForward = boatStartPosition.forward;
+                float distanceAhead = Random.Range(whaleSpawnMinDistance, whaleSpawnMaxDistance);
+                float lateralOffset = Random.Range(-whaleLateralSpread, whaleLateralSpread);
+                
+                spawnPos = boatStartPosition.position + 
+                          boatForward * distanceAhead + 
+                          boatStartPosition.right * lateralOffset;
+                spawnPos.y = -1f; // Underwater
+                
+                DebugLog($"Whale spawn calculated: ahead={distanceAhead:F1}, lateral={lateralOffset:F1}");
+            }
+            else
+            {
+                // Regular obstacles - random within bounds
+                spawnPos = new Vector3(
+                    Random.Range(waterBounds.min.x + spawnMargin, waterBounds.max.x - spawnMargin),
+                    0f,
+                    Random.Range(waterBounds.min.z + spawnMargin, waterBounds.max.z - spawnMargin)
+                );
+            }
+            
+            if (IsValidSpawnPosition(spawnPos, minSpacingToUse))
+            {
+                DebugLog($"Found valid spawn position at attempt {attempt + 1}: {spawnPos}");
+                return spawnPos;
+            }
+        }
+        
+        DebugLog($"Warning: Could not find valid spawn position after {maxAttempts} attempts");
+        return Vector3.zero;
     }
     
     private void SpawnTreasures()
     {
-        if (treasurePrefab == null) return;
-        
-        // Calculate level direction and length
-        Vector3 levelDirection = (endPoint.position - startPoint.position).normalized;
-        float length = Vector3.Distance(startPoint.position, endPoint.position);
-        Vector3 levelPerpendicular = new Vector3(levelDirection.z, 0, -levelDirection.x);
-        
-        // Determine number of treasures
-        int numTreasures = Random.Range(minTreasures, maxTreasures + 1);
-        
-        // Track used positions to prevent overlap
-        List<Vector3> usedPositions = new List<Vector3>();
-        
-        // Spawn treasures
-        for (int i = 0; i < numTreasures; i++)
+        if (treasurePrefab == null) 
         {
-            // Calculate position along path
-            float distanceAlongPath = Random.Range(length * 0.1f, length * 0.9f);
-            float offsetFromCenter = Random.Range(-levelWidth * 0.4f, levelWidth * 0.4f);
-            
-            Vector3 position = startPoint.position + (levelDirection * distanceAlongPath) + (levelPerpendicular * offsetFromCenter);
-            
-            // Check for minimum spacing between items
-            bool validPosition = true;
-            foreach (Vector3 usedPos in usedPositions)
+            DebugLog("ERROR: No treasure prefab assigned!");
+            return;
+        }
+        
+        int treasureCount = Random.Range(minTreasures, maxTreasures + 1);
+        DebugLog($"Attempting to spawn {treasureCount} treasures");
+        
+        int successfulSpawns = 0;
+        
+        for (int i = 0; i < treasureCount; i++)
+        {
+            Vector3 spawnPos = GetTreasureSpawnPosition();
+            if (spawnPos == Vector3.zero) 
             {
-                if (Vector3.Distance(position, usedPos) < minObstacleSpacing * 0.5f)
-                {
-                    validPosition = false;
-                    break;
-                }
-            }
-            
-            // Skip if invalid position
-            if (!validPosition)
-            {
-                // Try again (reduce i to retry)
-                i--;
+                DebugLog($"Failed to find spawn position for treasure {i + 1}");
                 continue;
             }
             
-            // Spawn treasure
-            GameObject treasure = Instantiate(treasurePrefab, position, Quaternion.identity);
-            treasure.transform.parent = transform;
-            
-            // Set treasure value based on position (harder to reach = more points)
-            TreasureBox treasureBox = treasure.GetComponent<TreasureBox>();
-            if (treasureBox != null)
+            try
             {
-                // Treasures on the sides are worth more
-                float normalizedOffset = Mathf.Abs(offsetFromCenter) / (levelWidth * 0.4f);
-                int valueIndex = normalizedOffset > 0.6f ? 1 : 0; // Higher value if far from center
-                treasureBox.pointValue = treasureValues[valueIndex];
+                GameObject treasure = Instantiate(treasurePrefab, spawnPos, Quaternion.identity);
+                treasure.transform.parent = transform;
+                
+                TreasureBox treasureBox = treasure.GetComponent<TreasureBox>();
+                if (treasureBox != null)
+                {
+                    int pointValue = treasureValues[Random.Range(0, treasureValues.Length)];
+                    treasureBox.pointValue = pointValue;
+                    totalPossibleScore += pointValue;
+                    
+                    DebugLog($"Treasure spawned with value: {pointValue}");
+                }
+                
+                spawnedTreasures.Add(treasure);
+                usedPositions.Add(spawnPos);
+                successfulSpawns++;
             }
-            
-            // Add to lists
-            levelObjects.Add(treasure);
-            usedPositions.Add(position);
+            catch (System.Exception e)
+            {
+                DebugLog($"Error spawning treasure: {e.Message}");
+            }
         }
+        
+        DebugLog($"Total treasures spawned: {successfulSpawns}/{treasureCount}");
+    }
+    
+    private Vector3 GetTreasureSpawnPosition()
+    {
+        int maxAttempts = 100;
+        
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            Vector3 spawnPos = new Vector3(
+                Random.Range(waterBounds.min.x + spawnMargin, waterBounds.max.x - spawnMargin),
+                0.2f, // Slightly above water
+                Random.Range(waterBounds.min.z + spawnMargin, waterBounds.max.z - spawnMargin)
+            );
+            
+            if (IsValidSpawnPosition(spawnPos, minSpacing))
+            {
+                return spawnPos;
+            }
+        }
+        
+        return Vector3.zero;
+    }
+    
+    private bool IsValidSpawnPosition(Vector3 position, float minDistance)
+    {
+        // Check against finish point
+        if (finishPoint != null && Vector3.Distance(position, finishPoint.position) < finishIslandRadius)
+        {
+            return false;
+        }
+        
+        // Check against boat start position (reduced distance check)
+        if (boatStartPosition != null && Vector3.Distance(position, boatStartPosition.position) < minDistance * 0.5f)
+        {
+            return false;
+        }
+        
+        // Check against all used positions
+        foreach (Vector3 usedPos in usedPositions)
+        {
+            if (Vector3.Distance(position, usedPos) < minDistance)
+            {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    private Quaternion GetRandomRotation()
+    {
+        return Quaternion.Euler(0, Random.Range(0f, 360f), 0);
+    }
+    
+    private void SetupObstacleMovement(GameObject obstacle)
+    {
+        ObstacleBase obstacleBase = obstacle.GetComponent<ObstacleBase>();
+        if (obstacleBase != null)
+        {
+            obstacleBase.SetMovementEnabled(enableMovement);
+            obstacleBase.SetMoveSpeed(moveSpeed * Random.Range(0.5f, 1.5f));
+            
+            Vector3 randomDir = new Vector3(
+                Random.Range(-0.5f, 0.5f),
+                0f, 
+                Random.Range(-0.5f, 0.5f)
+            ).normalized;
+            
+            obstacleBase.SetMoveDirection(randomDir);
+            
+            DebugLog($"Movement setup for {obstacle.name} - Speed: {obstacleBase.GetMoveSpeed()}, Dir: {randomDir}");
+        }
+        
+        // No whale-specific setup needed - new WhaleObstacle handles its own AI
     }
     
     public void ClearLevel()
     {
-        // Destroy all level objects
-        foreach (GameObject obj in levelObjects)
+        foreach (GameObject obstacle in spawnedObstacles)
         {
-            if (obj != null)
+            if (obstacle != null) 
             {
-                Destroy(obj);
+                if (Application.isPlaying)
+                    Destroy(obstacle);
+                else
+                    DestroyImmediate(obstacle);
             }
         }
         
-        levelObjects.Clear();
+        foreach (GameObject treasure in spawnedTreasures)
+        {
+            if (treasure != null) 
+            {
+                if (Application.isPlaying)
+                    Destroy(treasure);
+                else
+                    DestroyImmediate(treasure);
+            }
+        }
+        
+        spawnedObstacles.Clear();
+        spawnedTreasures.Clear();
+        usedPositions.Clear();
+        totalPossibleScore = 0;
+        
+        DebugLog("Level cleared");
     }
     
-    // Helper method to visualize level in editor
+    [ContextMenu("Generate Level (Manual)")]
+    public void ManualGenerateLevel()
+    {
+        if (!Application.isPlaying)
+        {
+            InitializeWaterBounds();
+            if (autoDetectWaterBounds)
+            {
+                AutoPositionFinishPoint();
+            }
+        }
+        GenerateLevel();
+    }
+    
+    [ContextMenu("Clear Level")]
+    public void ManualClearLevel()
+    {
+        ClearLevel();
+    }
+    
+    // Public getters
+    public List<GameObject> GetSpawnedObstacles() => spawnedObstacles;
+    public List<GameObject> GetSpawnedTreasures() => spawnedTreasures;
+    public int GetTotalPossibleScore() => totalPossibleScore;
+    public Bounds GetWaterBounds() => waterBounds;
+    
+    private void DebugLog(string message)
+    {
+        if (enableDebugLogs)
+        {
+            Debug.Log($"[LevelManager] {message}");
+        }
+    }
+    
     private void OnDrawGizmos()
     {
-        if (startPoint != null && endPoint != null)
+        if (!showGizmos) return;
+        
+        // Draw fixed spawn area
+        Gizmos.color = Color.blue;
+        Gizmos.DrawWireCube(spawnAreaCenter, spawnAreaSize);
+        
+        // Draw whale spawn zone
+        if (boatStartPosition != null)
         {
-            // Calculate level direction and perpendicular
-            Vector3 levelDirection = (endPoint.position - startPoint.position).normalized;
-            levelDirection.y = 0;
-            Vector3 levelPerpendicular = new Vector3(levelDirection.z, 0, -levelDirection.x);
-            
-            // Draw level path
-            Gizmos.color = Color.yellow;
-            Gizmos.DrawLine(startPoint.position, endPoint.position);
-            
-            // Draw boundaries
             Gizmos.color = Color.red;
-            Gizmos.DrawLine(
-                startPoint.position + levelPerpendicular * (levelWidth * 0.5f),
-                endPoint.position + levelPerpendicular * (levelWidth * 0.5f)
-            );
-            Gizmos.DrawLine(
-                startPoint.position - levelPerpendicular * (levelWidth * 0.5f),
-                endPoint.position - levelPerpendicular * (levelWidth * 0.5f)
-            );
+            Vector3 boatForward = boatStartPosition.forward;
+            Vector3 whaleZoneStart = boatStartPosition.position + boatForward * whaleSpawnMinDistance;
+            Vector3 whaleZoneEnd = boatStartPosition.position + boatForward * whaleSpawnMaxDistance;
+            
+            // Draw whale spawn corridor
+            Vector3 left = boatStartPosition.right * -whaleLateralSpread;
+            Vector3 right = boatStartPosition.right * whaleLateralSpread;
+            
+            Gizmos.DrawLine(whaleZoneStart + left, whaleZoneStart + right);
+            Gizmos.DrawLine(whaleZoneEnd + left, whaleZoneEnd + right);
+            Gizmos.DrawLine(whaleZoneStart + left, whaleZoneEnd + left);
+            Gizmos.DrawLine(whaleZoneStart + right, whaleZoneEnd + right);
+        }
+        
+        // Draw spawn positions
+        Gizmos.color = Color.yellow;
+        foreach (Vector3 pos in usedPositions)
+        {
+            Gizmos.DrawWireSphere(pos, 1f);
+        }
+        
+        // Draw finish island area
+        if (finishPoint != null)
+        {
+            Gizmos.color = Color.green;
+            Gizmos.DrawWireSphere(finishPoint.position, finishIslandRadius);
+        }
+        
+        // Draw start area
+        if (boatStartPosition != null)
+        {
+            Gizmos.color = Color.white;
+            Gizmos.DrawWireSphere(boatStartPosition.position, 2f);
         }
     }
 }
