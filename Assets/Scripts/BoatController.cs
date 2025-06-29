@@ -47,6 +47,7 @@ public class BoatController : MonoBehaviour
     [Header("Paddle Pattern Settings")]
     [SerializeField] private float patternTimeWindow = 2.0f;  // Time window for paddle pattern
     [SerializeField] private int consecutivePaddlesForTurn = 2; // Consecutive paddles needed for turn
+    [SerializeField] private float consecutiveTimeout = 1.5f; // Timeout for consecutive count reset
 
     [Header("Water Current Settings")]
     [SerializeField] private bool inheritWaterCurrent = true;
@@ -76,6 +77,12 @@ public class BoatController : MonoBehaviour
     // Paddle pattern tracking
     private List<PaddleStroke> paddleHistory = new List<PaddleStroke>();
     private float currentSpeed = 0.0f;
+    
+    // Real-time consecutive tracking - FIXED
+    private int currentConsecutiveLeft = 0;
+    private int currentConsecutiveRight = 0;
+    private float lastPaddleTime = 0f;
+    private bool lastPaddleWasLeft = false;
     
     // Water data
     private float waterHeight = 0f;
@@ -175,6 +182,9 @@ public class BoatController : MonoBehaviour
         
         // Clean up old paddle history
         CleanupPaddleHistory();
+        
+        // Update consecutive counts - FIXED
+        UpdateConsecutiveCounts();
     }
     
     private void FixedUpdate()
@@ -211,6 +221,21 @@ public class BoatController : MonoBehaviour
         while (paddleHistory.Count > 0 && currentTime - paddleHistory[0].timestamp > patternTimeWindow)
         {
             paddleHistory.RemoveAt(0);
+        }
+    }
+
+    // FIXED: Update consecutive counts with timeout
+    private void UpdateConsecutiveCounts()
+    {
+        // Reset consecutive counts if too much time has passed since last paddle
+        if (Time.time - lastPaddleTime > consecutiveTimeout)
+        {
+            if (currentConsecutiveLeft > 0 || currentConsecutiveRight > 0)
+            {
+                DebugLog("Resetting consecutive counts due to timeout");
+                currentConsecutiveLeft = 0;
+                currentConsecutiveRight = 0;
+            }
         }
     }
 
@@ -383,11 +408,45 @@ public class BoatController : MonoBehaviour
         StartCoroutine(RightPaddleCooldown());
     }
     
-    // Record new paddle stroke
+    // FIXED: Record new paddle stroke with real-time consecutive tracking
     private void RecordPaddleStroke(bool isLeftPaddle)
     {
         paddleHistory.Add(new PaddleStroke(isLeftPaddle, Time.time));
         DebugLog($"Paddle stroke recorded: {(isLeftPaddle ? "LEFT" : "RIGHT")} at time {Time.time}");
+        
+        // Update consecutive counters in real-time
+        if (isLeftPaddle)
+        {
+            if (lastPaddleWasLeft)
+            {
+                currentConsecutiveLeft++;
+                currentConsecutiveRight = 0;
+            }
+            else
+            {
+                currentConsecutiveLeft = 1;
+                currentConsecutiveRight = 0;
+            }
+            lastPaddleWasLeft = true;
+        }
+        else // Right paddle
+        {
+            if (!lastPaddleWasLeft)
+            {
+                currentConsecutiveRight++;
+                currentConsecutiveLeft = 0;
+            }
+            else
+            {
+                currentConsecutiveRight = 1;
+                currentConsecutiveLeft = 0;
+            }
+            lastPaddleWasLeft = false;
+        }
+        
+        lastPaddleTime = Time.time;
+        
+        DebugLog($"Updated consecutive counts - Left: {currentConsecutiveLeft}, Right: {currentConsecutiveRight}");
     }
     
     // Analyze paddle pattern and apply appropriate effect
@@ -745,31 +804,17 @@ public class BoatController : MonoBehaviour
     public bool IsRightPaddling() { return isRightPaddling; }
     public InputMode GetInputMode() { return inputMode; }
     
-    // For debugging and visualization
+    // FIXED: For debugging and visualization - now uses real-time tracking
     public int GetConsecutiveLeftCount()
     {
-        int count = 0;
-        for (int i = paddleHistory.Count - 1; i >= 0; i--)
-        {
-            if (paddleHistory[i].isLeftPaddle)
-                count++;
-            else
-                break;
-        }
-        return count;
+        // Return current consecutive count instead of calculating from history
+        return currentConsecutiveLeft;
     }
     
     public int GetConsecutiveRightCount()
     {
-        int count = 0;
-        for (int i = paddleHistory.Count - 1; i >= 0; i--)
-        {
-            if (!paddleHistory[i].isLeftPaddle)
-                count++;
-            else
-                break;
-        }
-        return count;
+        // Return current consecutive count instead of calculating from history
+        return currentConsecutiveRight;
     }
     
     public List<bool> GetPaddleHistory()
