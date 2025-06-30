@@ -17,7 +17,10 @@ public class WhaleObstacle : ObstacleBase
     [SerializeField] private bool enableIntercept = true;
     
     [Header("Position Constraints")]
-    [SerializeField] private float maxDistanceFromOrigin = 100f;
+       
+    [Header("Debug")]
+    [SerializeField] private float debugInterval = 2f;
+    private float lastDebugTime = 0f;
     
     // State tracking
     private Transform boatTransform;
@@ -62,7 +65,7 @@ public class WhaleObstacle : ObstacleBase
     
     protected override void Move()
     {
-        // Override base movement
+        // Override base movement - whales have custom AI movement
     }
     
     private void UpdateWhaleAI()
@@ -236,12 +239,20 @@ public class WhaleObstacle : ObstacleBase
         }
     }
     
+    private void DebugLog(string message)
+    {
+        if (enableDebugTracking)
+        {
+            Debug.Log($"[WhaleObstacle] {message}");
+        }
+    }
+    
     // Public getters
     public bool IsJumping() => isJumping;
     public bool IsIntercepting() => isIntercepting;
     public Vector3 GetInterceptTarget() => interceptTarget;
     
-    // Gizmos
+    // Gizmos for visual debugging
     private void OnDrawGizmosSelected()
     {
         if (!Application.isPlaying) return;
