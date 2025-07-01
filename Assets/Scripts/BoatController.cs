@@ -118,6 +118,7 @@ public class BoatController : MonoBehaviour
 
     private void Start()
     {
+        transform.position = new Vector3(0, 0, 0);
         DebugLog("BoatController Start() called");
         
         // Initialize rotation

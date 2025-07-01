@@ -78,8 +78,8 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _Altitude0: 1267.25
-    - _Altitude1: 1824.8
+    - _Altitude0: 1350.5
+    - _Altitude1: 1558.4
     - _Altitude2: 3500
     - _Altitude3: 4000
     - _Altitude4: 6500
@@ -100,17 +100,17 @@ Material:
     - _Mode: 0
     - _NoiseAmp1: -4
     - _NoiseAmp2: 3
-    - _NoiseBias: 0.2655
-    - _NoiseBias2: 0.325
-    - _NoiseBias3: 0.301
-    - _NoiseFreq1: 1.84359
-    - _NoiseFreq2: 9.366301
+    - _NoiseBias: 0.099
+    - _NoiseBias2: 0.18
+    - _NoiseBias3: 0.081
+    - _NoiseFreq1: 1.2142199
+    - _NoiseFreq2: 10.2654
     - _OcclusionStrength: 1
     - _Parallax: 0.02
-    - _SampleCount0: 43.849506
-    - _SampleCount1: 43.849506
-    - _SampleCountL: 11.870917
-    - _Scatter: 0.2062
+    - _SampleCount0: 46.331936
+    - _SampleCount1: 46.331936
+    - _SampleCountL: 11.892656
+    - _Scatter: 0.1396
     - _SrcBlend: 1
     - _SunSize: 0.008
     - _UVSec: 0
@@ -126,7 +126,7 @@ Material:
     - _Color: {r: 1, g: 1, b: 1, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _GroundColor: {r: 0.36899996, g: 0.34899998, b: 0.34099993, a: 1}
-    - _Scroll1: {r: 0.04308544, g: 0, b: -0.0075971247, a: 0}
-    - _Scroll2: {r: 0.34468353, g: 0, b: -0.060776997, a: 0}
+    - _Scroll1: {r: 0.0025319406, g: 0, b: -0.0004464498, a: 0}
+    - _Scroll2: {r: 0.020255525, g: 0, b: -0.0035715983, a: 0}
     - _SkyTint: {r: 0.5, g: 0.5, b: 0.5, a: 1}
   m_BuildTextureStacks: []
