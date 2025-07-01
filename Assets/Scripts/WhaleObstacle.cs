@@ -19,8 +19,9 @@ public class WhaleObstacle : ObstacleBase
     [Header("Position Constraints")]
        
     [Header("Debug")]
-    [SerializeField] private float debugInterval = 2f;
-    private float lastDebugTime = 0f;
+    // Removed [SerializeField] to avoid serialization conflict
+    private float whaleDebugInterval = 2f;
+    private float whaleLastDebugTime = 0f;
     
     // State tracking
     private Transform boatTransform;
@@ -53,7 +54,7 @@ public class WhaleObstacle : ObstacleBase
         InitializeJumpCurve();
         idleTimer = Random.Range(1f, timeBetweenJumps);
         
-        DebugLog($"Whale initialized at {transform.position}");
+        WhaleDebugLog($"Whale initialized at {transform.position}");
     }
     
     protected override void Update()
@@ -145,7 +146,7 @@ public class WhaleObstacle : ObstacleBase
         jumpStartPosition = transform.position;
         jumpStartPosition.y = underwaterYPosition;
         
-        DebugLog($"Whale starting jump from {jumpStartPosition}");
+        WhaleDebugLog($"Whale starting jump from {jumpStartPosition}");
     }
     
     private void UpdateJump()
@@ -180,7 +181,7 @@ public class WhaleObstacle : ObstacleBase
         transform.position = endPos;
         
         idleTimer = timeBetweenJumps;
-        DebugLog($"Whale jump ended, returned to {endPos}");
+        WhaleDebugLog($"Whale jump ended, returned to {endPos}");
     }
     
     private void InitializeJumpCurve()
@@ -208,7 +209,7 @@ public class WhaleObstacle : ObstacleBase
             safePos.y = underwaterYPosition;
             transform.position = safePos;
             
-            DebugLog($"Whale teleported to safe area: {safePos}");
+            WhaleDebugLog($"Whale teleported to safe area: {safePos}");
         }
         
         // Ensure Y constraint when not jumping
@@ -221,11 +222,11 @@ public class WhaleObstacle : ObstacleBase
     
     private void DebugTracking()
     {
-        if (enableDebugTracking && Time.time - lastDebugTime >= debugInterval)
+        if (enableDebugTracking && Time.time - whaleLastDebugTime >= whaleDebugInterval)
         {
             string state = isJumping ? "JUMPING" : (isIntercepting ? "INTERCEPTING" : "IDLE");
-            DebugLog($"[{gameObject.name}] Pos: {transform.position:F2}, State: {state}, Target: {interceptTarget:F2}");
-            lastDebugTime = Time.time;
+            WhaleDebugLog($"[{gameObject.name}] Pos: {transform.position:F2}, State: {state}, Target: {interceptTarget:F2}");
+            whaleLastDebugTime = Time.time;
         }
     }
     
@@ -235,11 +236,12 @@ public class WhaleObstacle : ObstacleBase
         if (isJumping || transform.position.y > underwaterYPosition + 0.5f)
         {
             base.HandlePlayerCollision(collision);
-            DebugLog("Whale collision with player during surface breach");
+            WhaleDebugLog("Whale collision with player during surface breach");
         }
     }
     
-    private void DebugLog(string message)
+    // Renamed to avoid hiding base method
+    private void WhaleDebugLog(string message)
     {
         if (enableDebugTracking)
         {
