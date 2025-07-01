@@ -41,6 +41,11 @@ public class PaddleIKController : MonoBehaviour
     public int minConsecutivePaddles = 2;
     public float speedThreshold = 0.3f;
     
+    [Header("ESP32 Integration")]
+    public bool useRawAngle = false;
+    public float rawAngle = 0f;
+    public float rawAngleMultiplier = 1.0f;
+    
     [Header("Debug")]
     public bool enableDebugLogs = true;
     public bool showGizmos = true;
@@ -68,8 +73,18 @@ public class PaddleIKController : MonoBehaviour
     void Update()
     {
         UpdatePaddleTransform();
-        DetectPaddlePattern();
-        AnimatePaddle();
+        
+        if (!useRawAngle)
+        {
+            DetectPaddlePattern();
+            AnimatePaddle();
+        }
+        else
+        {
+            // Use raw angle from ESP32
+            targetRotationValue = initialRotation.z + (rawAngle * rawAngleMultiplier);
+        }
+        
         ApplyRotation();
     }
     
@@ -296,6 +311,14 @@ public class PaddleIKController : MonoBehaviour
                 Gizmos.DrawWireSphere(paddle.position + Vector3.up * 0.5f, 0.15f);
             }
             
+            // Show raw angle visualization when in use
+            if (useRawAngle)
+            {
+                Gizmos.color = Color.magenta;
+                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, rawAngle) * Vector3.forward;
+                Gizmos.DrawRay(paddle.position, rawDir * 0.5f);
+            }
+            
             // Show swing amplitude visualization
             if (currentPattern == PaddlePattern.Alternating && useBalancedSwing)
             {
@@ -334,9 +357,19 @@ public class PaddleIKController : MonoBehaviour
         DebugLog($"Balanced swing: {(enabled ? "enabled" : "disabled")}");
     }
     
+    // For ESP32 integration - set raw angle directly
+    public void SetRawAngle(float angle)
+    {
+        useRawAngle = true;
+        rawAngle = angle;
+        DebugLog($"Set raw angle: {angle:F1}°");
+    }
+    
     // For testing
     public void ForcePattern(int patternIndex)
     {
+        useRawAngle = false;
+        
         if (patternIndex >= 0 && patternIndex < System.Enum.GetValues(typeof(PaddlePattern)).Length)
         {
             previousPattern = currentPattern;
