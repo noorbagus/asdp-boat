@@ -1,283 +1,175 @@
 using UnityEngine;
+using System.Collections;
 
 public class WhaleObstacle : ObstacleBase
 {
-    [Header("Whale Properties")]
-    [SerializeField] private float jumpHeight = 5f;
-    [SerializeField] private float jumpDuration = 4f;
-    [SerializeField] private float timeBetweenJumps = 6f;
-    [SerializeField] private float surfaceYPosition = 0.5f;
-    [SerializeField] private float underwaterYPosition = -1f;
-    [SerializeField] private AnimationCurve jumpCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+    [Header("Collision Handling")]
+    [SerializeField] private bool hasCollided = false;
+    [SerializeField] private float bounceForce = 8f;
+    [SerializeField] private float boatBounceMultiplier = 1.2f;
+    [SerializeField] private float whaleBounceMultiplier = 0.8f;
+    [SerializeField] private float fadeOutTime = 1.5f;
     
-    [Header("AI Behavior")]
-    [SerializeField] private float aggroRadius = 40f;
-    [SerializeField] private float interceptSpeed = 8f;
-    [SerializeField] private float interceptDistance = 20f;
-    [SerializeField] private bool enableIntercept = true;
+    // Component references
+    private Rigidbody whaleRb;
+    private Renderer whaleRenderer;
+    private Collider whaleCollider;
+    private bool isDisappearing = false;
     
-    [Header("Position Constraints")]
-       
-    [Header("Debug")]
-    // Removed [SerializeField] to avoid serialization conflict
-    private float whaleDebugInterval = 2f;
-    private float whaleLastDebugTime = 0f;
-    
-    // State tracking
-    private Transform boatTransform;
-    private Rigidbody boatRigidbody;
-    private bool isJumping = false;
-    private bool isIntercepting = false;
-    private float jumpTimer = 0f;
-    private float idleTimer = 0f;
-    private Vector3 interceptTarget;
-    private Vector3 jumpStartPosition;
+    // Collision debugger reference
+    private CollisionDebugger debugger;
     
     protected override void Start()
     {
         base.Start();
         
-        // Find boat
-        BoatController boat = FindObjectOfType<BoatController>();
-        if (boat != null)
-        {
-            boatTransform = boat.transform;
-            boatRigidbody = boat.GetComponent<Rigidbody>();
-        }
+        // Cache components for better performance
+        whaleRb = GetComponent<Rigidbody>();
+        whaleRenderer = GetComponentInChildren<Renderer>();
+        whaleCollider = GetComponent<Collider>();
         
-        // Start underwater
-        Vector3 pos = transform.position;
-        pos.y = underwaterYPosition;
-        transform.position = pos;
-        jumpStartPosition = pos;
+        // Find collision debugger
+        debugger = FindObjectOfType<CollisionDebugger>();
         
-        InitializeJumpCurve();
-        idleTimer = Random.Range(1f, timeBetweenJumps);
-        
-        WhaleDebugLog($"Whale initialized at {transform.position}");
+        Debug.Log($"Whale initialized at {transform.position}");
     }
     
     protected override void Update()
     {
-        UpdateWhaleAI();
-        EnforceConstraints();
-        DebugTracking();
+        // Early exit if already handled collision
+        if (hasCollided || isDisappearing) return;
+        
+        // Other update logic handled by parent class
+        base.Update();
     }
     
-    protected override void Move()
+    protected override void OnCollisionEnter(Collision collision)
     {
-        // Override base movement - whales have custom AI movement
-    }
-    
-    private void UpdateWhaleAI()
-    {
-        if (isJumping)
+        // Register collision with debugger
+        if (debugger != null)
         {
-            UpdateJump();
-        }
-        else
-        {
-            UpdateIdleState();
-        }
-    }
-    
-    private void UpdateIdleState()
-    {
-        if (enableIntercept && boatTransform != null)
-        {
-            float distanceToBoat = Vector3.Distance(transform.position, boatTransform.position);
-            
-            if (distanceToBoat <= aggroRadius)
-            {
-                CalculateInterceptTarget();
-                MoveTowardsIntercept();
-            }
+            debugger.RegisterCollision(collision);
         }
         
-        // Check for jump trigger
-        idleTimer -= Time.deltaTime;
-        if (idleTimer <= 0f)
-        {
-            StartJump();
-        }
-    }
-    
-    private void CalculateInterceptTarget()
-    {
-        if (boatTransform == null) return;
+        // Log extended collision data
+        Debug.Log($"Whale collision with {collision.gameObject.name}, velocity: {whaleRb?.velocity}, hasCollided: {hasCollided}");
         
-        Vector3 boatPos = boatTransform.position;
-        Vector3 boatVelocity = boatRigidbody ? boatRigidbody.velocity : boatTransform.forward * 5f;
-        
-        // Predict boat position
-        Vector3 predictedBoatPos = boatPos + boatVelocity * (interceptDistance / interceptSpeed);
-        
-        // Position whale ahead of predicted path
-        interceptTarget = predictedBoatPos + boatTransform.forward * interceptDistance;
-        interceptTarget.y = underwaterYPosition;
-        
-        isIntercepting = true;
-    }
-    
-    private void MoveTowardsIntercept()
-    {
-        if (!isIntercepting) return;
-        
-        Vector3 direction = (interceptTarget - transform.position).normalized;
-        direction.y = 0; // Keep horizontal movement only
-        
-        Vector3 newPos = transform.position + direction * interceptSpeed * Time.deltaTime;
-        newPos.y = underwaterYPosition;
-        transform.position = newPos;
-        
-        // Stop intercepting when close to target
-        float distanceToTarget = Vector3.Distance(transform.position, interceptTarget);
-        if (distanceToTarget < 5f)
-        {
-            isIntercepting = false;
-        }
-    }
-    
-    private void StartJump()
-    {
-        isJumping = true;
-        isIntercepting = false;
-        jumpTimer = 0f;
-        jumpStartPosition = transform.position;
-        jumpStartPosition.y = underwaterYPosition;
-        
-        WhaleDebugLog($"Whale starting jump from {jumpStartPosition}");
-    }
-    
-    private void UpdateJump()
-    {
-        jumpTimer += Time.deltaTime;
-        float progress = Mathf.Clamp01(jumpTimer / jumpDuration);
-        
-        if (progress >= 1f)
-        {
-            EndJump();
-        }
-        else
-        {
-            float heightProgress = jumpCurve.Evaluate(progress);
-            float currentY = Mathf.Lerp(underwaterYPosition, surfaceYPosition + jumpHeight, heightProgress);
-            
-            Vector3 jumpPosition = new Vector3(
-                jumpStartPosition.x,
-                currentY,
-                jumpStartPosition.z
-            );
-            
-            transform.position = jumpPosition;
-        }
-    }
-    
-    private void EndJump()
-    {
-        isJumping = false;
-        
-        Vector3 endPos = new Vector3(jumpStartPosition.x, underwaterYPosition, jumpStartPosition.z);
-        transform.position = endPos;
-        
-        idleTimer = timeBetweenJumps;
-        WhaleDebugLog($"Whale jump ended, returned to {endPos}");
-    }
-    
-    private void InitializeJumpCurve()
-    {
-        if (jumpCurve.length == 0)
-        {
-            Keyframe[] keys = new Keyframe[4];
-            keys[0] = new Keyframe(0f, 0f, 0f, 2f);
-            keys[1] = new Keyframe(0.3f, 1f, 0f, 0f);
-            keys[2] = new Keyframe(0.7f, 1f, 0f, 0f);
-            keys[3] = new Keyframe(1f, 0f, -2f, 0f);
-            jumpCurve = new AnimationCurve(keys);
-        }
-    }
-    
-    private void EnforceConstraints()
-    {
-        Vector3 pos = transform.position;
-        float distanceFromOrigin = Vector3.Distance(new Vector3(pos.x, 0, pos.z), Vector3.zero);
-        
-        if (distanceFromOrigin > maxDistanceFromOrigin)
-        {
-            // Teleport back to safe area
-            Vector3 safePos = Vector3.zero + Random.insideUnitSphere * (maxDistanceFromOrigin * 0.5f);
-            safePos.y = underwaterYPosition;
-            transform.position = safePos;
-            
-            WhaleDebugLog($"Whale teleported to safe area: {safePos}");
-        }
-        
-        // Ensure Y constraint when not jumping
-        if (!isJumping && pos.y != underwaterYPosition)
-        {
-            pos.y = underwaterYPosition;
-            transform.position = pos;
-        }
-    }
-    
-    private void DebugTracking()
-    {
-        if (enableDebugTracking && Time.time - whaleLastDebugTime >= whaleDebugInterval)
-        {
-            string state = isJumping ? "JUMPING" : (isIntercepting ? "INTERCEPTING" : "IDLE");
-            WhaleDebugLog($"[{gameObject.name}] Pos: {transform.position:F2}, State: {state}, Target: {interceptTarget:F2}");
-            whaleLastDebugTime = Time.time;
-        }
+        // Proceed with normal collision handling
+        base.OnCollisionEnter(collision);
     }
     
     protected override void HandlePlayerCollision(Collision collision)
     {
-        // Only damage when jumping (visible)
-        if (isJumping || transform.position.y > underwaterYPosition + 0.5f)
+        // Prevent multiple collisions
+        if (hasCollided)
         {
-            base.HandlePlayerCollision(collision);
-            WhaleDebugLog("Whale collision with player during surface breach");
+            Debug.Log("Whale collision ignored - already collided");
+            return;
         }
+        
+        Debug.Log("Whale collision handler executing");
+        hasCollided = true;
+        
+        // Apply damage via game manager
+        GameManager gameManager = GameManager.Instance;
+        if (gameManager != null)
+        {
+            gameManager.TakeDamage(damageAmount);
+            Debug.Log($"Applied damage: {damageAmount}");
+        }
+        
+        // Play collision effects
+        PlayCollisionEffects(collision.contacts[0].point);
+        
+        // Calculate bounce direction
+        Vector3 bounceDirection = (transform.position - collision.transform.position).normalized;
+        bounceDirection.y = 0.2f; // Slight upward component
+        
+        // Apply bounce to whale
+        if (whaleRb != null)
+        {
+            whaleRb.velocity = Vector3.zero; // Reset velocity
+            whaleRb.AddForce(bounceDirection * bounceForce * whaleBounceMultiplier, ForceMode.Impulse);
+            Debug.Log($"Applied whale bounce force: {bounceDirection * bounceForce * whaleBounceMultiplier}");
+        }
+        else
+        {
+            Debug.LogWarning("Whale has no Rigidbody component!");
+        }
+        
+        // Apply bounce to boat
+        Rigidbody playerRb = collision.gameObject.GetComponent<Rigidbody>();
+        if (playerRb != null)
+        {
+            Vector3 playerBounceDir = -bounceDirection;
+            playerBounceDir.y = 0; // Keep player bounce horizontal
+            playerRb.AddForce(playerBounceDir * bounceForce * boatBounceMultiplier, ForceMode.Impulse);
+            Debug.Log($"Applied boat bounce force: {playerBounceDir * bounceForce * boatBounceMultiplier}");
+        }
+        
+        // Prevent further collisions
+        if (whaleCollider != null && collision.collider != null)
+        {
+            Physics.IgnoreCollision(whaleCollider, collision.collider, true);
+            Debug.Log($"Ignored future collisions between whale and {collision.gameObject.name}");
+        }
+        
+        // Start disappearing effect
+        Debug.Log("Starting disappear coroutine");
+        StartCoroutine(DisappearAfterCollision());
     }
     
-    // Renamed to avoid hiding base method
-    private void WhaleDebugLog(string message)
+    private IEnumerator DisappearAfterCollision()
     {
-        if (enableDebugTracking)
-        {
-            Debug.Log($"[WhaleObstacle] {message}");
-        }
-    }
-    
-    // Public getters
-    public bool IsJumping() => isJumping;
-    public bool IsIntercepting() => isIntercepting;
-    public Vector3 GetInterceptTarget() => interceptTarget;
-    
-    // Gizmos for visual debugging
-    private void OnDrawGizmosSelected()
-    {
-        if (!Application.isPlaying) return;
+        isDisappearing = true;
+        Debug.Log("Disappear coroutine started");
         
-        // Draw aggro radius
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, aggroRadius);
+        // Wait for bounce to complete
+        yield return new WaitForSeconds(0.8f);
+        Debug.Log("Bounce animation completed");
         
-        // Draw intercept target
-        if (isIntercepting)
+        // Fade out if renderer exists
+        if (whaleRenderer != null && whaleRenderer.material.HasProperty("_Color"))
         {
-            Gizmos.color = Color.red;
-            Gizmos.DrawLine(transform.position, interceptTarget);
-            Gizmos.DrawWireSphere(interceptTarget, 2f);
+            Color originalColor = whaleRenderer.material.color;
+            float elapsedTime = 0f;
+            
+            Debug.Log("Starting fade out animation");
+            while (elapsedTime < fadeOutTime)
+            {
+                elapsedTime += Time.deltaTime;
+                float alpha = Mathf.Lerp(1f, 0f, elapsedTime / fadeOutTime);
+                
+                Color newColor = originalColor;
+                newColor.a = alpha;
+                whaleRenderer.material.color = newColor;
+                
+                yield return null;
+            }
+            Debug.Log("Fade out animation completed");
+        }
+        else
+        {
+            Debug.LogWarning("Whale has no renderer or material doesn't support alpha!");
         }
         
-        // Draw jump arc
-        if (isJumping)
+        // Disable colliders
+        Collider[] colliders = GetComponentsInChildren<Collider>();
+        foreach (Collider col in colliders)
         {
-            Gizmos.color = Color.green;
-            Vector3 peakPos = new Vector3(jumpStartPosition.x, surfaceYPosition + jumpHeight, jumpStartPosition.z);
-            Gizmos.DrawLine(jumpStartPosition, peakPos);
-            Gizmos.DrawWireSphere(peakPos, 1f);
+            col.enabled = false;
         }
+        Debug.Log($"Disabled {colliders.Length} colliders");
+        
+        // Make rigidbody kinematic to remove from physics
+        if (whaleRb != null)
+        {
+            whaleRb.isKinematic = true;
+            Debug.Log("Set Rigidbody to kinematic");
+        }
+        
+        // Destroy game object
+        Debug.Log("Scheduling destruction");
+        Destroy(gameObject, 0.5f);
     }
 }

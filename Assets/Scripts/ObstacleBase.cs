@@ -13,6 +13,13 @@ public abstract class ObstacleBase : MonoBehaviour
     [SerializeField] protected float moveSpeed = 1f;
     [SerializeField] protected Vector3 moveDirection = Vector3.zero;
     
+    [Header("LookAt Behavior")]
+    [SerializeField] protected bool enableLookAtBoat = false;
+    [SerializeField] protected float lookAtSpeed = 2f;
+    [SerializeField] protected bool onlyRotateY = true;
+    [SerializeField] protected bool smoothLookAt = true;
+    [SerializeField] protected float lookAtRange = 50f;
+    
     [Header("Movement Constraints")]
     [SerializeField] protected bool moveX = true;
     [SerializeField] protected bool moveY = false;
@@ -32,6 +39,10 @@ public abstract class ObstacleBase : MonoBehaviour
     protected float lastDebugTime = 0f;
     protected float debugInterval = 1f;
     protected Vector3 initialPosition;
+    
+    // LookAt boat references
+    protected Transform boatTransform;
+    protected BoatController boatController;
     
     protected virtual void Start()
     {
@@ -60,6 +71,74 @@ public abstract class ObstacleBase : MonoBehaviour
                 DebugLog($"[{gameObject.name}] Pos: {transform.position:F2}, Dir: {moveDirection:F2}, Speed: {moveSpeed:F2}");
                 lastDebugTime = Time.time;
             }
+        }
+        
+        // Handle LookAt behavior
+        if (enableLookAtBoat)
+        {
+            UpdateLookAtBoat();
+        }
+    }
+    
+    protected virtual void UpdateLookAtBoat()
+    {
+        // Skip if no valid boat reference
+        if (!IsBoatValid())
+        {
+            return;
+        }
+        
+        // Check if boat is within range
+        float distanceToBoat = Vector3.Distance(transform.position, boatTransform.position);
+        if (distanceToBoat > lookAtRange)
+        {
+            return; // Don't look at boat if too far
+        }
+        
+        // Calculate direction to boat
+        Vector3 directionToBoat = boatTransform.position - transform.position;
+        
+        // Remove Y component if only rotating on Y axis
+        if (onlyRotateY)
+        {
+            directionToBoat.y = 0;
+        }
+        
+        if (directionToBoat.sqrMagnitude > 0.01f) // Use sqrMagnitude for performance
+        {
+            Quaternion targetRotation = Quaternion.LookRotation(directionToBoat);
+            
+            if (smoothLookAt)
+            {
+                // Smooth rotation towards boat
+                transform.rotation = Quaternion.Slerp(
+                    transform.rotation, 
+                    targetRotation, 
+                    lookAtSpeed * Time.deltaTime
+                );
+            }
+            else
+            {
+                // Instant rotation towards boat
+                transform.rotation = targetRotation;
+            }
+        }
+    }
+    
+    private bool IsBoatValid()
+    {
+        if (boatTransform == null) return false;
+        
+        try
+        {
+            return boatTransform.gameObject.activeInHierarchy;
+        }
+        catch
+        {
+            // Clear invalid reference if object was destroyed
+            boatTransform = null;
+            boatController = null;
+            return false;
         }
     }
     
@@ -190,12 +269,55 @@ public abstract class ObstacleBase : MonoBehaviour
         DebugLog($"{gameObject.name} boundary constraints set - Center: {center}, Size: {size}, MaxDist: {maxDistance}");
     }
     
+    // LookAt control methods
+    public void SetLookAtBoat(bool enabled)
+    {
+        enableLookAtBoat = enabled;
+        DebugLog($"{gameObject.name} look at boat: {enabled}");
+    }
+    
+    public void SetBoatReference(Transform boat)
+    {
+        boatTransform = boat;
+        boatController = boat?.GetComponent<BoatController>();
+        DebugLog($"{gameObject.name} boat reference set: {boat?.name}");
+    }
+    
+    public void SetLookAtSpeed(float speed)
+    {
+        lookAtSpeed = speed;
+        DebugLog($"{gameObject.name} look at speed: {speed}");
+    }
+    
+    public void SetLookAtRange(float range)
+    {
+        lookAtRange = range;
+        DebugLog($"{gameObject.name} look at range: {range}");
+    }
+    
     // Getters
     public int GetDamageAmount() => damageAmount;
     public float GetMoveSpeed() => moveSpeed;
     public bool IsMovementEnabled() => canMove;
     public Vector3 GetMoveDirection() => moveDirection;
     public Vector3 GetInitialPosition() => initialPosition;
+    public bool IsLookingAtBoat() => enableLookAtBoat;
+    
+    public float GetDistanceToBoat()
+    {
+        if (!IsBoatValid()) return float.MaxValue;
+        
+        try
+        {
+            return Vector3.Distance(transform.position, boatTransform.position);
+        }
+        catch
+        {
+            boatTransform = null;
+            boatController = null;
+            return float.MaxValue;
+        }
+    }
     
     // Force position reset
     public void ResetToSpawnArea()
@@ -238,6 +360,29 @@ public abstract class ObstacleBase : MonoBehaviour
             // Draw line to center
             Gizmos.color = Color.blue;
             Gizmos.DrawLine(transform.position, spawnAreaCenter);
+        }
+        
+        // Draw LookAt range and direction
+        if (enableLookAtBoat && Application.isPlaying)
+        {
+            // Draw look at range
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawWireSphere(transform.position, lookAtRange);
+            
+            // Draw line to boat if within range
+            if (IsBoatValid())
+            {
+                float distanceToBoat = Vector3.Distance(transform.position, boatTransform.position);
+                if (distanceToBoat <= lookAtRange)
+                {
+                    Gizmos.color = Color.magenta;
+                    Gizmos.DrawLine(transform.position, boatTransform.position);
+                    
+                    // Draw forward direction
+                    Gizmos.color = Color.red;
+                    Gizmos.DrawRay(transform.position, transform.forward * 3f);
+                }
+            }
         }
     }
 }

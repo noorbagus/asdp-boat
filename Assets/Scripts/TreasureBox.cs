@@ -11,9 +11,15 @@ public class TreasureBox : MonoBehaviour
     [SerializeField] private float bobHeight = 0.2f;
     [SerializeField] private float bobSpeed = 1f;
     
+    [Header("Debug")]
+    [SerializeField] private bool enableDebugLogs = true;
+    
     private AudioSource audioSource;
     private Vector3 startPosition;
     private bool collected = false;
+    
+    // Collision debugger reference
+    private CollisionDebugger debugger;
     
     private void Start()
     {
@@ -37,6 +43,11 @@ public class TreasureBox : MonoBehaviour
                 visualModel = gameObject;
             }
         }
+        
+        // Find collision debugger
+        debugger = FindObjectOfType<CollisionDebugger>();
+        
+        DebugLog($"TreasureBox initialized at {transform.position} with value {pointValue}");
     }
     
     private void Update()
@@ -54,11 +65,27 @@ public class TreasureBox : MonoBehaviour
     
     private void OnTriggerEnter(Collider other)
     {
+        // Register trigger with debugger
+        if (debugger != null)
+        {
+            debugger.RegisterTrigger(GetComponent<Collider>(), other);
+        }
+        
+        DebugLog($"Trigger entered by {other.gameObject.name}, collected: {collected}");
+        
         if (collected) return;
         
-        if (other.CompareTag("Player"))
+        if (other.CompareTag("Player") || other.CompareTag("Paddle"))
         {
-            CollectTreasure(other.gameObject);
+            // If paddle hit us, try to find the boat
+            GameObject player = other.gameObject;
+            if (other.CompareTag("Paddle") && other.transform.parent != null)
+            {
+                player = other.transform.parent.gameObject;
+                DebugLog($"Paddle hit, found parent boat: {player.name}");
+            }
+            
+            CollectTreasure(player);
         }
     }
     
@@ -66,12 +93,18 @@ public class TreasureBox : MonoBehaviour
     {
         // Mark as collected
         collected = true;
+        DebugLog($"Collecting treasure by {player.name}");
         
         // Add score
         GameManager gameManager = GameManager.Instance;
         if (gameManager != null)
         {
             gameManager.AddScore(pointValue);
+            DebugLog($"Added {pointValue} points to score");
+        }
+        else
+        {
+            DebugLog("Warning: GameManager not found!");
         }
         
         // Play effects
@@ -88,10 +121,13 @@ public class TreasureBox : MonoBehaviour
         if (col != null)
         {
             col.enabled = false;
+            DebugLog("Disabled collider");
         }
         
         // Destroy after effects finish
-        Destroy(gameObject, collectEffect != null ? collectEffect.main.duration + 0.5f : 0.5f);
+        float destroyDelay = collectEffect != null ? collectEffect.main.duration + 0.5f : 0.5f;
+        DebugLog($"Scheduling destruction in {destroyDelay} seconds");
+        Destroy(gameObject, destroyDelay);
     }
     
     private void PlayCollectEffects()
@@ -101,12 +137,22 @@ public class TreasureBox : MonoBehaviour
         {
             ParticleSystem effect = Instantiate(collectEffect, transform.position, Quaternion.identity);
             effect.Play();
+            DebugLog("Playing collect particle effect");
         }
         
         // Play sound
         if (audioSource != null && collectSound != null)
         {
             audioSource.PlayOneShot(collectSound);
+            DebugLog("Playing collect sound");
+        }
+    }
+    
+    private void DebugLog(string message)
+    {
+        if (enableDebugLogs)
+        {
+            Debug.Log($"[TreasureBox] {message}");
         }
     }
 }

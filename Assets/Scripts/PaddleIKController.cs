@@ -24,27 +24,29 @@ public class PaddleIKController : MonoBehaviour
     [Range(5f, 100f)]
     public float swingAmplitude = 25f;
     public bool useBalancedSwing = true;
+    
     [Header("Turning Animation")]
     [Range(0.1f, 1.0f)]
-    [Tooltip("Controls how much of the swing amplitude is used during turning animations")]
-    public float swingDamping = 0.6f; // For ConsecutiveLeft/Right patterns
+    public float swingDamping = 0.6f;
     [Range(0.5f, 2.0f)]
-    [Tooltip("Controls how fast the paddle swings during turning animations")]
-    public float turnSwingSpeedMultiplier = 0.8f; // For ConsecutiveLeft/Right patterns
+    public float turnSwingSpeedMultiplier = 0.8f;
     
     [Header("Transition Settings")]
     public float patternChangeDelay = 0.1f;
-    public float patternBlendDuration = 0.8f; // Duration of blend between pattern states
+    public float patternBlendDuration = 0.8f;
     public AnimationCurve transitionCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
     
     [Header("Pattern Detection")]
     public int minConsecutivePaddles = 2;
     public float speedThreshold = 0.3f;
     
-    [Header("ESP32 Integration")]
+    [Header("ESP32 Integration - UPDATED")]
     public bool useRawAngle = false;
     public float rawAngle = 0f;
     public float rawAngleMultiplier = 1.0f;
+    [Range(0f, 1f)]
+    public float rawAngleSmoothing = 0.8f; // NEW: Smoothing for ESP32 input
+    public bool overrideWithRawAngle = true; // NEW: ESP32 override pattern animations
     
     [Header("Debug")]
     public bool enableDebugLogs = true;
@@ -61,9 +63,13 @@ public class PaddleIKController : MonoBehaviour
     private float currentRotationValue;
     private float targetRotationValue;
     private float previousRotationValue;
-    private float transitionProgress = 1f; // 0 to 1, 1 = transition complete
+    private float transitionProgress = 1f;
     private float swingTimer;
     private float lastPatternChangeTime;
+    
+    // NEW: ESP32 smoothing
+    private float smoothedRawAngle = 0f;
+    private bool isESP32Controlled = false;
     
     void Start()
     {
@@ -74,18 +80,43 @@ public class PaddleIKController : MonoBehaviour
     {
         UpdatePaddleTransform();
         
-        if (!useRawAngle)
+        // Check if controlled by ESP32
+        CheckESP32Control();
+        
+        if (useRawAngle && isESP32Controlled)
         {
-            DetectPaddlePattern();
-            AnimatePaddle();
+            // ESP32 mode: Use smoothed raw angle
+            UpdateRawAngleSmoothing();
+            targetRotationValue = initialRotation.z + smoothedRawAngle;
         }
         else
         {
-            // Use raw angle from ESP32
-            targetRotationValue = initialRotation.z + (rawAngle * rawAngleMultiplier);
+            // Normal mode: Pattern-based animation
+            DetectPaddlePattern();
+            AnimatePaddle();
         }
         
         ApplyRotation();
+    }
+    
+    private void CheckESP32Control()
+    {
+        // Auto-detect if ESP32 is controlling
+        ESP32GyroController esp32 = FindObjectOfType<ESP32GyroController>();
+        isESP32Controlled = (esp32 != null && esp32.IsConnected());
+        
+        // Override pattern animations when ESP32 is active
+        if (isESP32Controlled && overrideWithRawAngle)
+        {
+            useRawAngle = true;
+        }
+    }
+    
+    private void UpdateRawAngleSmoothing()
+    {
+        // Smooth the raw angle input for better visual result
+        smoothedRawAngle = Mathf.Lerp(smoothedRawAngle, rawAngle * rawAngleMultiplier, 
+                                     (1f - rawAngleSmoothing) * Time.deltaTime * 10f);
     }
     
     private void InitializePaddle()
@@ -115,7 +146,7 @@ public class PaddleIKController : MonoBehaviour
     
     private void DetectPaddlePattern()
     {
-        if (boatController == null) return;
+        if (boatController == null || isESP32Controlled) return;
         
         int leftCount = boatController.GetConsecutiveLeftCount();
         int rightCount = boatController.GetConsecutiveRightCount();
@@ -125,15 +156,10 @@ public class PaddleIKController : MonoBehaviour
         
         if (newPattern != targetPattern && Time.time - lastPatternChangeTime > patternChangeDelay)
         {
-            // Begin transition to new pattern
             previousPattern = currentPattern;
             targetPattern = newPattern;
             lastPatternChangeTime = Time.time;
-            
-            // Store current rotation as starting point for blend
             previousRotationValue = currentRotationValue;
-            
-            // Start new transition
             transitionProgress = 0f;
             
             LogPatternChange(newPattern, leftCount, rightCount);
@@ -142,7 +168,6 @@ public class PaddleIKController : MonoBehaviour
     
     private PaddlePattern DeterminePattern(int leftCount, int rightCount, float currentSpeed)
     {
-        // Priority 1: Turning patterns
         if (leftCount >= minConsecutivePaddles)
         {
             return PaddlePattern.ConsecutiveLeft;
@@ -153,7 +178,6 @@ public class PaddleIKController : MonoBehaviour
             return PaddlePattern.ConsecutiveRight;
         }
         
-        // Priority 2: Forward movement
         if (currentSpeed > speedThreshold)
         {
             return PaddlePattern.Alternating;
@@ -164,23 +188,19 @@ public class PaddleIKController : MonoBehaviour
     
     private void AnimatePaddle()
     {
-        // Update transition progress
         if (transitionProgress < 1f)
         {
             transitionProgress += Time.deltaTime / patternBlendDuration;
             transitionProgress = Mathf.Clamp01(transitionProgress);
             
-            // Update current pattern based on transition progress
             if (transitionProgress >= 1f)
             {
                 currentPattern = targetPattern;
             }
         }
         
-        // Advance swing timer
         swingTimer += Time.deltaTime * swingSpeed;
         
-        // Calculate target rotation for each pattern
         float patternRotation;
         
         switch (targetPattern)
@@ -202,12 +222,10 @@ public class PaddleIKController : MonoBehaviour
                 break;
         }
         
-        // Apply eased transition between rotation values
         if (transitionProgress < 1f)
         {
             float t = transitionCurve.Evaluate(transitionProgress);
             targetRotationValue = Mathf.LerpAngle(previousRotationValue, patternRotation, t);
-            DebugLog($"Transitioning: {transitionProgress:F2}, Blend: {t:F2}, From: {previousRotationValue:F1}° To: {patternRotation:F1}°");
         }
         else
         {
@@ -219,13 +237,11 @@ public class PaddleIKController : MonoBehaviour
     {
         if (useBalancedSwing)
         {
-            // Balanced left-right swing like React demo
             float swing = Mathf.Sin(swingTimer) * swingAmplitude;
             return initialRotation.z + swing;
         }
         else
         {
-            // Upward-only swing (original style)
             float swing = Mathf.Abs(Mathf.Sin(swingTimer)) * swingAmplitude;
             return initialRotation.z - swing;
         }
@@ -233,14 +249,12 @@ public class PaddleIKController : MonoBehaviour
     
     private float CalculateLeftTurnRotation()
     {
-        // Smooth oscillation for left turn - using same math as React component
         float swing = Mathf.Abs(Mathf.Sin(swingTimer * turnSwingSpeedMultiplier)) * swingAmplitude * swingDamping;
         return initialRotation.z + leftPaddleAngle - swing;
     }
     
     private float CalculateRightTurnRotation()
     {
-        // Smooth oscillation for right turn - using same math as React component
         float swing = Mathf.Abs(Mathf.Sin(swingTimer * turnSwingSpeedMultiplier)) * swingAmplitude * swingDamping;
         return initialRotation.z + rightPaddleAngle + swing;
     }
@@ -249,10 +263,8 @@ public class PaddleIKController : MonoBehaviour
     {
         if (paddle == null || character == null) return;
         
-        // Smooth rotation toward target value
         currentRotationValue = Mathf.LerpAngle(currentRotationValue, targetRotationValue, rotationSpeed * Time.deltaTime);
         
-        // Apply rotation to paddle
         paddle.eulerAngles = new Vector3(
             initialRotation.x,
             character.eulerAngles.y + rotationOffset.y,
@@ -293,44 +305,28 @@ public class PaddleIKController : MonoBehaviour
     {
         if (!showGizmos || character == null) return;
         
-        // Draw paddle position
         Gizmos.color = Color.yellow;
         Vector3 paddlePos = character.position + character.TransformDirection(offsetFromCharacter);
         Gizmos.DrawWireSphere(paddlePos, 0.1f);
         
         if (paddle != null && Application.isPlaying)
         {
-            // Main pattern indicator
-            Gizmos.color = GetPatternColor(currentPattern);
+            // ESP32 vs Pattern mode indicator
+            Gizmos.color = isESP32Controlled ? Color.magenta : GetPatternColor(currentPattern);
             Gizmos.DrawWireCube(paddle.position + Vector3.up * 0.5f, Vector3.one * 0.2f);
             
-            // Draw transition indicator if in progress
-            if (transitionProgress < 1f)
+            if (transitionProgress < 1f && !isESP32Controlled)
             {
                 Gizmos.color = Color.Lerp(GetPatternColor(previousPattern), GetPatternColor(targetPattern), transitionProgress);
                 Gizmos.DrawWireSphere(paddle.position + Vector3.up * 0.5f, 0.15f);
             }
             
-            // Show raw angle visualization when in use
-            if (useRawAngle)
+            // Show ESP32 angle visualization
+            if (useRawAngle && isESP32Controlled)
             {
-                Gizmos.color = Color.magenta;
-                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, rawAngle) * Vector3.forward;
+                Gizmos.color = Color.cyan;
+                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, smoothedRawAngle) * Vector3.forward;
                 Gizmos.DrawRay(paddle.position, rawDir * 0.5f);
-            }
-            
-            // Show swing amplitude visualization
-            if (currentPattern == PaddlePattern.Alternating && useBalancedSwing)
-            {
-                // Left limit
-                Vector3 leftDir = Quaternion.Euler(0, character.eulerAngles.y, -swingAmplitude) * Vector3.forward;
-                Gizmos.color = new Color(1, 0, 0, 0.3f); // Red with transparency
-                Gizmos.DrawRay(paddle.position, leftDir * 0.5f);
-                
-                // Right limit
-                Vector3 rightDir = Quaternion.Euler(0, character.eulerAngles.y, swingAmplitude) * Vector3.forward;
-                Gizmos.color = new Color(0, 0, 1, 0.3f); // Blue with transparency
-                Gizmos.DrawRay(paddle.position, rightDir * 0.5f);
             }
         }
     }
@@ -346,10 +342,11 @@ public class PaddleIKController : MonoBehaviour
         }
     }
     
-    // Public methods for external access
+    // Public methods
     public PaddlePattern GetCurrentPattern() => currentPattern;
     public float GetTransitionProgress() => transitionProgress;
     public bool IsAnimating() => currentPattern != PaddlePattern.None;
+    public bool IsESP32Controlled() => isESP32Controlled;
     
     public void SetBalancedSwing(bool enabled)
     {
@@ -357,17 +354,19 @@ public class PaddleIKController : MonoBehaviour
         DebugLog($"Balanced swing: {(enabled ? "enabled" : "disabled")}");
     }
     
-    // For ESP32 integration - set raw angle directly
+    // ESP32 integration - IMPROVED
     public void SetRawAngle(float angle)
     {
         useRawAngle = true;
         rawAngle = angle;
-        DebugLog($"Set raw angle: {angle:F1}°");
     }
     
-    // For testing
+    // Force pattern (used by ESP32GyroController)
     public void ForcePattern(int patternIndex)
     {
+        // Only apply if not overridden by ESP32
+        if (isESP32Controlled && overrideWithRawAngle) return;
+        
         useRawAngle = false;
         
         if (patternIndex >= 0 && patternIndex < System.Enum.GetValues(typeof(PaddlePattern)).Length)
