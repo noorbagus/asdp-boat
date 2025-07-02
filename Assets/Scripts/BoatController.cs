@@ -8,7 +8,8 @@ public class BoatController : MonoBehaviour
     {
         Keyboard,                // Standard keyboard testing mode
         BluetoothSensor,         // Physical paddle controller
-        KeyboardWithDirectControl // Keyboard with direct movement control
+        KeyboardWithDirectControl, // Keyboard with direct movement control
+        CameraBodyTracking       // NEW: Camera body tracking with MediaPipe
     }
 
     [Header("Input Settings")]
@@ -18,6 +19,11 @@ public class BoatController : MonoBehaviour
     [SerializeField] private KeyCode forwardKey = KeyCode.UpArrow;
     [SerializeField] private KeyCode backwardKey = KeyCode.DownArrow;
     [SerializeField] private float directControlForce = 2.0f;
+
+    [Header("Camera Body Tracking")]
+    [SerializeField] private CameraBodyTracker cameraBodyTracker;
+    [SerializeField] private bool enableCameraFallback = true;
+    [SerializeField] private float cameraTimeoutDuration = 3f;
 
     [Header("Rotation Settings")]
     [SerializeField] private float turnAngle = 15f;         // Degrees to turn per paddle
@@ -78,11 +84,15 @@ public class BoatController : MonoBehaviour
     private List<PaddleStroke> paddleHistory = new List<PaddleStroke>();
     private float currentSpeed = 0.0f;
     
-    // Real-time consecutive tracking - FIXED
+    // Real-time consecutive tracking
     private int currentConsecutiveLeft = 0;
     private int currentConsecutiveRight = 0;
     private float lastPaddleTime = 0f;
     private bool lastPaddleWasLeft = false;
+    
+    // Camera body tracking state
+    private float lastCameraInputTime = 0f;
+    private bool cameraTrackingActive = false;
     
     // Water data
     private float waterHeight = 0f;
@@ -98,7 +108,7 @@ public class BoatController : MonoBehaviour
     private float turnProgress = 0f;      // Progress of current turn (0-1)
     private float startRotationY = 0f;    // Starting rotation for smooth curve
 
-    // Private variables untuk smooth rotation
+    // Private variables for smooth rotation
     private float targetRotationVelocity = 0f;
     private float currentRotationVelocity = 0f;
     private float inputDecay = 4f; // How fast input fades
@@ -131,7 +141,13 @@ public class BoatController : MonoBehaviour
         gameManager = FindObjectOfType<GameManager>();
         suimonoModule = FindObjectOfType<Suimono.Core.SuimonoModule>();
         
-        DebugLog($"Components found - Rigidbody: {boatRb != null}, AudioSource: {audioSource != null}, GameManager: {gameManager != null}, Suimono: {suimonoModule != null}");
+        // Find camera body tracker if not assigned
+        if (cameraBodyTracker == null)
+        {
+            cameraBodyTracker = FindObjectOfType<CameraBodyTracker>();
+        }
+        
+        DebugLog($"Components found - Rigidbody: {boatRb != null}, AudioSource: {audioSource != null}, GameManager: {gameManager != null}, Suimono: {suimonoModule != null}, CameraTracker: {cameraBodyTracker != null}");
         DebugLog($"Input Mode set to: {inputMode}");
         DebugLog($"Left Paddle Key: {leftPaddleKey}, Right Paddle Key: {rightPaddleKey}");
         
@@ -144,6 +160,33 @@ public class BoatController : MonoBehaviour
             audioSource.maxDistance = 20.0f;
             DebugLog("AudioSource component added");
         }
+        
+        // Initialize camera tracking if in camera mode
+        if (inputMode == InputMode.CameraBodyTracking)
+        {
+            InitializeCameraTracking();
+        }
+    }
+
+    private void InitializeCameraTracking()
+    {
+        if (cameraBodyTracker == null)
+        {
+            DebugLog("WARNING: Camera body tracker not found! Falling back to keyboard input.");
+            if (enableCameraFallback)
+            {
+                SetInputMode(InputMode.Keyboard);
+            }
+            return;
+        }
+        
+        // Subscribe to camera tracker events
+        cameraBodyTracker.OnPoseDetected += OnPoseDetected;
+        cameraBodyTracker.OnCameraStatusChanged += OnCameraStatusChanged;
+        cameraBodyTracker.OnErrorOccurred += OnCameraError;
+        
+        cameraTrackingActive = true;
+        DebugLog("Camera body tracking initialized");
     }
 
     private void Update()
@@ -179,13 +222,103 @@ public class BoatController : MonoBehaviour
             case InputMode.BluetoothSensor:
                 // Handled by BluetoothReceiver
                 break;
+                
+            case InputMode.CameraBodyTracking:
+                HandleCameraBodyTracking();
+                break;
         }
         
         // Clean up old paddle history
         CleanupPaddleHistory();
         
-        // Update consecutive counts - FIXED
+        // Update consecutive counts
         UpdateConsecutiveCounts();
+    }
+    
+    private void HandleCameraBodyTracking()
+    {
+        if (!cameraTrackingActive || cameraBodyTracker == null)
+        {
+            // Check for timeout and fallback
+            if (enableCameraFallback && Time.time - lastCameraInputTime > cameraTimeoutDuration)
+            {
+                DebugLog("Camera tracking timeout - falling back to keyboard");
+                SetInputMode(InputMode.Keyboard);
+            }
+            return;
+        }
+        
+        // Camera tracking is handled via events (OnPoseDetected)
+        // This method mainly checks for timeouts and status
+        
+        if (!cameraBodyTracker.IsCameraActive())
+        {
+            DebugLog("Camera not active in camera tracking mode");
+            
+            if (enableCameraFallback && Time.time - lastCameraInputTime > cameraTimeoutDuration)
+            {
+                DebugLog("Camera inactive timeout - falling back to keyboard");
+                SetInputMode(InputMode.Keyboard);
+            }
+        }
+    }
+
+    // Camera event handlers
+    private void OnPoseDetected(PoseDetectionData poseData)
+    {
+        if (inputMode != InputMode.CameraBodyTracking || !poseData.isValid)
+            return;
+        
+        lastCameraInputTime = Time.time;
+        
+        // Get the best position data (hands preferred, shoulders as fallback)
+        var (leftPos, rightPos, isUsingFallback) = poseData.GetBestPositionData();
+        
+        if (leftPos == Vector2.zero && rightPos == Vector2.zero)
+            return; // No valid data
+        
+        // Calculate Y position difference
+        float yDifference = leftPos.y - rightPos.y;
+        float threshold = isUsingFallback ? 0.08f : 0.05f; // Different thresholds for hands vs shoulders
+        
+        // Detect paddle motions
+        bool shouldPaddleLeft = yDifference < -threshold; // Left hand/shoulder lower
+        bool shouldPaddleRight = yDifference > threshold;  // Right hand/shoulder lower
+        
+        // Trigger paddle actions with debounce
+        if (shouldPaddleLeft && canPaddleLeft && Time.time - lastPaddleTime > paddleCooldown)
+        {
+            DebugLog($"Camera triggered LEFT paddle (Y diff: {yDifference:F3}, fallback: {isUsingFallback})");
+            PaddleLeft();
+        }
+        else if (shouldPaddleRight && canPaddleRight && Time.time - lastPaddleTime > paddleCooldown)
+        {
+            DebugLog($"Camera triggered RIGHT paddle (Y diff: {yDifference:F3}, fallback: {isUsingFallback})");
+            PaddleRight();
+        }
+    }
+    
+    private void OnCameraStatusChanged(bool isActive)
+    {
+        cameraTrackingActive = isActive;
+        DebugLog($"Camera status changed: {(isActive ? "Active" : "Inactive")}");
+        
+        if (!isActive && inputMode == InputMode.CameraBodyTracking && enableCameraFallback)
+        {
+            DebugLog("Camera deactivated - falling back to keyboard");
+            SetInputMode(InputMode.Keyboard);
+        }
+    }
+    
+    private void OnCameraError(string error)
+    {
+        DebugLog($"Camera error: {error}");
+        
+        if (inputMode == InputMode.CameraBodyTracking && enableCameraFallback)
+        {
+            DebugLog("Camera error - falling back to keyboard");
+            SetInputMode(InputMode.Keyboard);
+        }
     }
     
     private void FixedUpdate()
@@ -225,7 +358,7 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // FIXED: Update consecutive counts with timeout
+    // Update consecutive counts with timeout
     private void UpdateConsecutiveCounts()
     {
         // Reset consecutive counts if too much time has passed since last paddle
@@ -336,7 +469,7 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // Called from BluetoothReceiver when "L:1" is received or from keyboard input
+    // Called from BluetoothReceiver, keyboard input, or camera tracking
     public void PaddleLeft()
     {
         DebugLog("PaddleLeft() called!");
@@ -372,8 +505,7 @@ public class BoatController : MonoBehaviour
         StartCoroutine(LeftPaddleCooldown());
     }
 
-
-    // Called from BluetoothReceiver when "R:1" is received or from keyboard input
+    // Called from BluetoothReceiver, keyboard input, or camera tracking
     public void PaddleRight()
     {
         DebugLog("PaddleRight() called!");
@@ -409,7 +541,7 @@ public class BoatController : MonoBehaviour
         StartCoroutine(RightPaddleCooldown());
     }
     
-    // FIXED: Record new paddle stroke with real-time consecutive tracking
+    // Record new paddle stroke with real-time consecutive tracking
     private void RecordPaddleStroke(bool isLeftPaddle)
     {
         paddleHistory.Add(new PaddleStroke(isLeftPaddle, Time.time));
@@ -651,7 +783,7 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    private void PlayPaddleEffects(bool isLeft)
+private void PlayPaddleEffects(bool isLeft)
     {
         DebugLog($"Playing paddle effects for {(isLeft ? "LEFT" : "RIGHT")} paddle");
         
@@ -794,8 +926,32 @@ public class BoatController : MonoBehaviour
     // Set input mode
     public void SetInputMode(InputMode mode)
     {
+        var oldMode = inputMode;
         inputMode = mode;
-        DebugLog($"Input mode changed to: {mode}");
+        DebugLog($"Input mode changed from {oldMode} to {mode}");
+        
+        // Handle camera tracking initialization/cleanup
+        if (mode == InputMode.CameraBodyTracking && oldMode != InputMode.CameraBodyTracking)
+        {
+            InitializeCameraTracking();
+        }
+        else if (oldMode == InputMode.CameraBodyTracking && mode != InputMode.CameraBodyTracking)
+        {
+            CleanupCameraTracking();
+        }
+    }
+    
+    private void CleanupCameraTracking()
+    {
+        if (cameraBodyTracker != null)
+        {
+            cameraBodyTracker.OnPoseDetected -= OnPoseDetected;
+            cameraBodyTracker.OnCameraStatusChanged -= OnCameraStatusChanged;
+            cameraBodyTracker.OnErrorOccurred -= OnCameraError;
+        }
+        
+        cameraTrackingActive = false;
+        DebugLog("Camera body tracking cleaned up");
     }
     
     // Public accessors for external components
@@ -805,16 +961,14 @@ public class BoatController : MonoBehaviour
     public bool IsRightPaddling() { return isRightPaddling; }
     public InputMode GetInputMode() { return inputMode; }
     
-    // FIXED: For debugging and visualization - now uses real-time tracking
+    // For debugging and visualization - now uses real-time tracking
     public int GetConsecutiveLeftCount()
     {
-        // Return current consecutive count instead of calculating from history
         return currentConsecutiveLeft;
     }
     
     public int GetConsecutiveRightCount()
     {
-        // Return current consecutive count instead of calculating from history
         return currentConsecutiveRight;
     }
     
@@ -828,6 +982,10 @@ public class BoatController : MonoBehaviour
         return history;
     }
     
+    // Camera tracking status
+    public bool IsCameraTrackingActive() { return cameraTrackingActive; }
+    public float GetLastCameraInputTime() { return lastCameraInputTime; }
+    
     // Debug logging method
     private void DebugLog(string message)
     {
@@ -835,5 +993,10 @@ public class BoatController : MonoBehaviour
         {
             Debug.Log($"[BoatController] {message}");
         }
+    }
+    
+    private void OnDestroy()
+    {
+        CleanupCameraTracking();
     }
 }

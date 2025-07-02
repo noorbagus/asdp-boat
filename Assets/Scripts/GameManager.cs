@@ -13,6 +13,14 @@ public class GameManager : MonoBehaviour
     [Header("References")]
     [SerializeField] private UIManager uiManager;
     [SerializeField] private BoatController playerBoat;
+    [SerializeField] private InputSettingsManager inputSettings;
+    [SerializeField] private CameraBodyTracker cameraTracker;
+    [SerializeField] private CameraPreviewUI cameraPreviewUI;
+
+    [Header("Camera Integration")]
+    [SerializeField] private bool autoLoadCameraSettings = true;
+    [SerializeField] private bool autoStartCameraInCameraMode = true;
+    [SerializeField] private float cameraInitDelay = 1f;
 
     // Game state
     private float currentHealth;
@@ -21,6 +29,9 @@ public class GameManager : MonoBehaviour
     private bool isGameActive = false;
     private bool isLevelComplete = false;
     private bool isGameOver = false;
+
+    // Camera settings
+    private InputSettingsManager.CameraInputSettings cameraSettings;
 
     // Singleton pattern
     public static GameManager Instance { get; private set; }
@@ -39,6 +50,13 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        InitializeGame();
+        InitializeCameraSystem();
+        StartGame();
+    }
+
+    private void InitializeGame()
+    {
         // Initialize game state
         currentHealth = startingHealth;
         currentScore = 0;
@@ -47,27 +65,92 @@ public class GameManager : MonoBehaviour
         isLevelComplete = false;
         isGameOver = false;
         
+        // Find references if not set
+        FindComponents();
+        
         // Update UI
+        UpdateUI();
+    }
+
+    private void FindComponents()
+    {
+        if (uiManager == null)
+            uiManager = FindObjectOfType<UIManager>();
+        
+        if (playerBoat == null)
+            playerBoat = FindObjectOfType<BoatController>();
+            
+        if (inputSettings == null)
+            inputSettings = FindObjectOfType<InputSettingsManager>();
+            
+        if (cameraTracker == null)
+            cameraTracker = FindObjectOfType<CameraBodyTracker>();
+            
+        if (cameraPreviewUI == null)
+            cameraPreviewUI = FindObjectOfType<CameraPreviewUI>();
+    }
+
+    private void InitializeCameraSystem()
+    {
+        if (!autoLoadCameraSettings) return;
+
+        // Load camera settings from PlayerPrefs
+        LoadCameraSettings();
+
+        // Apply settings to camera system
+        if (inputSettings != null)
+        {
+            inputSettings.ApplySettings(cameraSettings);
+        }
+
+        // Set input mode based on saved preferences
+        var savedInputMode = (BoatController.InputMode)PlayerPrefs.GetInt("InputMode", 0);
+        if (playerBoat != null)
+        {
+            playerBoat.SetInputMode(savedInputMode);
+        }
+
+        // Auto-start camera if in camera mode
+        if (savedInputMode == BoatController.InputMode.CameraBodyTracking && autoStartCameraInCameraMode)
+        {
+            StartCoroutine(InitializeCameraWithDelay());
+        }
+    }
+
+    private void LoadCameraSettings()
+    {
+        cameraSettings = new InputSettingsManager.CameraInputSettings
+        {
+            selectedCamera = PlayerPrefs.GetInt("CameraIndex", 0),
+            sensitivity = PlayerPrefs.GetFloat("CameraSensitivity", 0.05f),
+            debounceTime = PlayerPrefs.GetFloat("CameraDebounce", 0.3f),
+            enableShoulderFallback = PlayerPrefs.GetInt("ShoulderFallback", 1) == 1,
+            showPreview = PlayerPrefs.GetInt("ShowPreview", 1) == 1,
+            showPoseOverlay = PlayerPrefs.GetInt("ShowPoseOverlay", 1) == 1,
+            previewSize = PlayerPrefs.GetFloat("PreviewSize", 1f),
+            previewAlpha = PlayerPrefs.GetFloat("PreviewAlpha", 0.8f),
+            previewPosition = PlayerPrefs.GetInt("PreviewPosition", 0)
+        };
+    }
+
+    private IEnumerator InitializeCameraWithDelay()
+    {
+        yield return new WaitForSeconds(cameraInitDelay);
+
+        if (cameraTracker != null)
+        {
+            cameraTracker.StartTracking();
+        }
+    }
+
+    private void UpdateUI()
+    {
         if (uiManager != null)
         {
             uiManager.UpdateHealth(currentHealth / startingHealth);
             uiManager.UpdateScore(currentScore);
             uiManager.UpdateLives(currentLives);
         }
-        
-        // Find references if not set
-        if (uiManager == null)
-        {
-            uiManager = FindObjectOfType<UIManager>();
-        }
-        
-        if (playerBoat == null)
-        {
-            playerBoat = FindObjectOfType<BoatController>();
-        }
-        
-        // Start the game
-        StartGame();
     }
 
     private void StartGame()
@@ -142,7 +225,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // NEW: Reduce score (for whale collision)
+    // Reduce score (for whale collision)
     public void ReduceScore(int points)
     {
         if (!isGameActive || isGameOver || isLevelComplete) return;
@@ -162,7 +245,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // NEW: Reduce lives (for octopus collision)
+    // Reduce lives (for octopus collision)
     public void ReduceLives(int livesToReduce = 1)
     {
         if (!isGameActive || isGameOver || isLevelComplete) return;
@@ -188,7 +271,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // NEW: Handle treasure collection
+    // Handle treasure collection
     public void CollectTreasure(GameObject treasure)
     {
         AddScore(100); // Fixed 100 points per treasure
@@ -202,7 +285,7 @@ public class GameManager : MonoBehaviour
         Debug.Log("Treasure collected! +100 points");
     }
 
-    // NEW: Handle whale collision
+    // Handle whale collision
     public void HitWhale(GameObject whale)
     {
         ReduceScore(50); // Lose 50 points
@@ -216,7 +299,7 @@ public class GameManager : MonoBehaviour
         Debug.Log("Hit whale! -50 points");
     }
 
-    // NEW: Handle octopus collision
+    // Handle octopus collision
     public void HitOctopus(GameObject octopus)
     {
         ReduceLives(1); // Lose 1 life
@@ -241,6 +324,12 @@ public class GameManager : MonoBehaviour
             playerBoat.enabled = false;
         }
         
+        // Stop camera tracking
+        if (cameraTracker != null && cameraTracker.IsCameraActive())
+        {
+            cameraTracker.StopTracking();
+        }
+        
         // Show game over UI
         if (uiManager != null)
         {
@@ -259,6 +348,12 @@ public class GameManager : MonoBehaviour
             playerBoat.enabled = false;
         }
         
+        // Stop camera tracking
+        if (cameraTracker != null && cameraTracker.IsCameraActive())
+        {
+            cameraTracker.StopTracking();
+        }
+        
         // Show level complete UI
         if (uiManager != null)
         {
@@ -268,18 +363,42 @@ public class GameManager : MonoBehaviour
 
     public void RestartLevel()
     {
+        // Save current input mode
+        if (playerBoat != null)
+        {
+            PlayerPrefs.SetInt("InputMode", (int)playerBoat.GetInputMode());
+        }
+        
         // Reload current scene
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     public void LoadMainMenu()
     {
+        // Save current input mode
+        if (playerBoat != null)
+        {
+            PlayerPrefs.SetInt("InputMode", (int)playerBoat.GetInputMode());
+        }
+        
+        // Stop camera tracking
+        if (cameraTracker != null && cameraTracker.IsCameraActive())
+        {
+            cameraTracker.StopTracking();
+        }
+        
         // Load main menu scene
         SceneManager.LoadScene("MainMenu");
     }
 
     public void NextLevel()
     {
+        // Save current input mode
+        if (playerBoat != null)
+        {
+            PlayerPrefs.SetInt("InputMode", (int)playerBoat.GetInputMode());
+        }
+        
         // Load next scene
         int nextSceneIndex = SceneManager.GetActiveScene().buildIndex + 1;
         
@@ -293,6 +412,44 @@ public class GameManager : MonoBehaviour
             LoadMainMenu();
         }
     }
+
+    // Camera system methods
+    public void SwitchInputMode(BoatController.InputMode newMode)
+    {
+        if (playerBoat != null)
+        {
+            var oldMode = playerBoat.GetInputMode();
+            playerBoat.SetInputMode(newMode);
+            
+            // Handle camera mode changes
+            if (newMode == BoatController.InputMode.CameraBodyTracking)
+            {
+                if (cameraTracker != null && !cameraTracker.IsCameraActive())
+                {
+                    cameraTracker.StartTracking();
+                }
+            }
+            else if (oldMode == BoatController.InputMode.CameraBodyTracking)
+            {
+                if (cameraTracker != null && cameraTracker.IsCameraActive())
+                {
+                    cameraTracker.StopTracking();
+                }
+            }
+            
+            // Save preference
+            PlayerPrefs.SetInt("InputMode", (int)newMode);
+        }
+    }
+
+    public void OnCameraPaddleTrigger(bool isLeft)
+    {
+        // Notify UI for visual feedback
+        if (uiManager != null)
+        {
+            uiManager.OnPaddleTrigger(isLeft);
+        }
+    }
     
     // Getters for current game state
     public float GetHealthPercent() { return currentHealth / startingHealth; }
@@ -302,4 +459,5 @@ public class GameManager : MonoBehaviour
     public bool IsGameActive() { return isGameActive; }
     public bool IsGameOver() { return isGameOver; }
     public bool IsLevelComplete() { return isLevelComplete; }
+    public InputSettingsManager.CameraInputSettings GetCameraSettings() { return cameraSettings; }
 }
