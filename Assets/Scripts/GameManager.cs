@@ -6,6 +6,7 @@ public class GameManager : MonoBehaviour
 {
     [Header("Game Settings")]
     [SerializeField] private float startingHealth = 100f;
+    [SerializeField] private int maxLives = 5;
     [SerializeField] private float levelTimeLimit = 180f; // 3 minutes
     [SerializeField] private int scoreToWin = 300; // Optional win condition
 
@@ -16,6 +17,7 @@ public class GameManager : MonoBehaviour
     // Game state
     private float currentHealth;
     private int currentScore = 0;
+    private int currentLives;
     private bool isGameActive = false;
     private bool isLevelComplete = false;
     private bool isGameOver = false;
@@ -40,6 +42,7 @@ public class GameManager : MonoBehaviour
         // Initialize game state
         currentHealth = startingHealth;
         currentScore = 0;
+        currentLives = maxLives;
         isGameActive = true;
         isLevelComplete = false;
         isGameOver = false;
@@ -49,6 +52,7 @@ public class GameManager : MonoBehaviour
         {
             uiManager.UpdateHealth(currentHealth / startingHealth);
             uiManager.UpdateScore(currentScore);
+            uiManager.UpdateLives(currentLives);
         }
         
         // Find references if not set
@@ -138,6 +142,94 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    // NEW: Reduce score (for whale collision)
+    public void ReduceScore(int points)
+    {
+        if (!isGameActive || isGameOver || isLevelComplete) return;
+        
+        currentScore -= points;
+        
+        // Ensure score doesn't go below 0
+        if (currentScore < 0)
+        {
+            currentScore = 0;
+        }
+        
+        // Update UI
+        if (uiManager != null)
+        {
+            uiManager.UpdateScore(currentScore);
+        }
+    }
+
+    // NEW: Reduce lives (for octopus collision)
+    public void ReduceLives(int livesToReduce = 1)
+    {
+        if (!isGameActive || isGameOver || isLevelComplete) return;
+        
+        currentLives -= livesToReduce;
+        
+        // Ensure lives don't go below 0
+        if (currentLives < 0)
+        {
+            currentLives = 0;
+        }
+        
+        // Update UI
+        if (uiManager != null)
+        {
+            uiManager.UpdateLives(currentLives);
+        }
+        
+        // Check for game over
+        if (currentLives <= 0)
+        {
+            GameOver();
+        }
+    }
+
+    // NEW: Handle treasure collection
+    public void CollectTreasure(GameObject treasure)
+    {
+        AddScore(100); // Fixed 100 points per treasure
+        
+        // Destroy treasure
+        if (treasure != null)
+        {
+            Destroy(treasure);
+        }
+        
+        Debug.Log("Treasure collected! +100 points");
+    }
+
+    // NEW: Handle whale collision
+    public void HitWhale(GameObject whale)
+    {
+        ReduceScore(50); // Lose 50 points
+        
+        // Destroy whale
+        if (whale != null)
+        {
+            Destroy(whale);
+        }
+        
+        Debug.Log("Hit whale! -50 points");
+    }
+
+    // NEW: Handle octopus collision
+    public void HitOctopus(GameObject octopus)
+    {
+        ReduceLives(1); // Lose 1 life
+        
+        // Destroy octopus
+        if (octopus != null)
+        {
+            Destroy(octopus);
+        }
+        
+        Debug.Log("Hit octopus! -1 life");
+    }
+
     public void GameOver()
     {
         isGameOver = true;
@@ -205,6 +297,8 @@ public class GameManager : MonoBehaviour
     // Getters for current game state
     public float GetHealthPercent() { return currentHealth / startingHealth; }
     public int GetScore() { return currentScore; }
+    public int GetLives() { return currentLives; }
+    public int GetMaxLives() { return maxLives; }
     public bool IsGameActive() { return isGameActive; }
     public bool IsGameOver() { return isGameOver; }
     public bool IsLevelComplete() { return isLevelComplete; }

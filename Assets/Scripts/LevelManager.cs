@@ -5,61 +5,49 @@ public class LevelManager : MonoBehaviour
 {
     [Header("Level Bounds")]
     [SerializeField] private Transform boatStartPosition;
+    [SerializeField] private Transform boatObject;
     [SerializeField] private Transform finishPoint;
-    [SerializeField] private float channelWidth = 10f;
     [SerializeField] private float levelLength = 120f;
     
-    [Header("Fixed Spawn Area")]
-    [SerializeField] private Vector3 spawnAreaCenter = Vector3.zero;
-    [SerializeField] private Vector3 spawnAreaSize = new Vector3(100f, 1f, 100f);
-    [SerializeField] private bool useFixedSpawnArea = true;
-    
-    [Header("Manual References")]
-    [SerializeField] private Suimono.Core.SuimonoModule manualSuimonoModule;
-    [SerializeField] private Suimono.Core.SuimonoObject manualWaterSurface;
-    
-    [Header("Water Integration")]
-    [SerializeField] private bool autoDetectWaterBounds = false;
-    [SerializeField] private float finishIslandRadius = 15f;
-    [SerializeField] private Vector2 finishOffset = new Vector2(0.8f, 0f);
+    [Header("S-Path Generation")]
+    [SerializeField] private float pathAmplitude = 30f;
+    [SerializeField] private float pathFrequency = 0.02f;
+    [SerializeField] private int pathResolution = 20;
+    [SerializeField] private float pathWidth = 50f;
+    [SerializeField] private AnimationCurve pathVariationCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
     
     [Header("Obstacles")]
-    [SerializeField] private GameObject[] obstaclePrefabs;
-    [SerializeField] private int minObstacles = 3;
-    [SerializeField] private int maxObstacles = 6;
-    [SerializeField] private float minObstacleSpacing = 15f;
+    [SerializeField] private GameObject whalePrefab;
+    [SerializeField] private GameObject octopusPrefab;
+    [SerializeField] private int numWhales = 2;
+    [SerializeField] private int numOctopuses = 3;
+    [SerializeField] private float obstacleDistanceFromPath = 15f;
     
-    [Header("Whale Settings")]
-    [SerializeField] private GameObject[] whalePrefabs;
-    [SerializeField] private int minWhales = 1;
-    [SerializeField] private int maxWhales = 3;
-    [SerializeField] private float whaleSpawnMinDistance = 30f;
-    [SerializeField] private float whaleSpawnMaxDistance = 80f;
-    [SerializeField] private float whaleLateralSpread = 20f;
-    [SerializeField] private float whaleDepth = -1.5f;
+    [Header("Object Scales")]
+    [Range(0.1f, 5.0f)]
+    [SerializeField] private float whaleScale = 1.0f;
+    [Range(0.1f, 5.0f)]
+    [SerializeField] private float octopusScale = 1.0f;
+    [Range(0.1f, 5.0f)]
+    [SerializeField] private float treasureScale = 1.0f;
     
-    [Header("Octopus Settings")]
-    [SerializeField] private GameObject[] octopusPrefabs;
-    [SerializeField] private int minOctopuses = 1;
-    [SerializeField] private int maxOctopuses = 4;
-    [SerializeField] private float octopusDepth = -0.5f;
+    [Header("Object Rotations")]
+    [SerializeField] private Vector3 whaleRotation = Vector3.zero;
+    [SerializeField] private Vector3 octopusRotation = Vector3.zero;
+    [SerializeField] private Vector3 treasureRotation = Vector3.zero;
+    [SerializeField] private bool randomizeRotations = true;
+    [SerializeField] private float rotationVariance = 30f;
     
     [Header("Treasures")]
     [SerializeField] private GameObject treasurePrefab;
-    [SerializeField] private int minTreasures = 5;
-    [SerializeField] private int maxTreasures = 8;
+    [SerializeField] private int numTreasures = 8;
     [SerializeField] private int[] treasureValues = { 50, 100 };
-    [SerializeField] private float treasureHeight = 0.2f;
-    
-    [Header("Movement Settings")]
-    [SerializeField] private float patrolDistance = 8f;
-    [SerializeField] private float moveSpeed = 1f;
-    [SerializeField] private bool enableMovement = true;
     
     [Header("Spawn Settings")]
-    [SerializeField] private bool useRandomDistribution = true;
-    [SerializeField] private float minSpacing = 8f;
-    [SerializeField] private float spawnMargin = 10f;
+    [SerializeField] private float minSpacing = 40f;
+    [SerializeField] private int maxSpawnAttempts = 15;
+    [SerializeField] private bool enableMovement = true;
+    [SerializeField] private float moveSpeed = 1f;
     
     [Header("Debug")]
     [SerializeField] private bool enableDebugLogs = true;
@@ -69,475 +57,286 @@ public class LevelManager : MonoBehaviour
     private List<GameObject> spawnedObstacles = new List<GameObject>();
     private List<GameObject> spawnedTreasures = new List<GameObject>();
     private List<Vector3> usedPositions = new List<Vector3>();
-    private Bounds waterBounds;
-    private Suimono.Core.SuimonoModule suimonoModule;
+    private List<Vector3> generatedPath = new List<Vector3>();
     private int totalPossibleScore = 0;
-    
-    private void Awake()
-    {
-        InitializeWaterBounds();
-        
-        if (autoDetectWaterBounds)
-        {
-            AutoPositionFinishPoint();
-        }
-    }
     
     private void Start()
     {
-        GenerateLevel();
-    }
-    
-    private void InitializeWaterBounds()
-    {
-        // Try to find Suimono module
-        if (manualSuimonoModule != null)
+        // Auto-find boat if not assigned
+        if (boatObject == null && boatStartPosition != null)
         {
-            suimonoModule = manualSuimonoModule;
-            DebugLog("Using manual Suimono module reference");
-        }
-        else
-        {
-            suimonoModule = FindObjectOfType<Suimono.Core.SuimonoModule>();
-            if (suimonoModule == null)
-            {
-                GameObject suimonoObj = GameObject.Find("SUIMONO_Module");
-                if (suimonoObj != null)
-                {
-                    suimonoModule = suimonoObj.GetComponent<Suimono.Core.SuimonoModule>();
-                }
-            }
-            DebugLog($"Auto-found Suimono module: {suimonoModule != null}");
-        }
-        
-        // Auto-detect boat if not assigned
-        if (boatStartPosition == null)
-        {
-            BoatController boat = FindObjectOfType<BoatController>();
+            BoatController boat = boatStartPosition.GetComponent<BoatController>();
             if (boat != null)
             {
-                boatStartPosition = boat.transform;
-                DebugLog($"Auto-detected boat at: {boatStartPosition.position}");
-            }
-            else
-            {
-                DebugLog("WARNING: No boat start position found!");
+                boatObject = boatStartPosition;
             }
         }
         
-        // Always use fixed bounds for consistent spawning
-        SetFixedWaterBounds();
-    }
-    
-    private void SetFixedWaterBounds()
-    {
-        waterBounds = new Bounds(spawnAreaCenter, spawnAreaSize);
-        DebugLog($"Fixed water bounds set: Center={spawnAreaCenter}, Size={spawnAreaSize}");
-    }
-    
-    private void AutoPositionFinishPoint()
-    {
-        if (finishPoint == null) return;
-        
-        Vector3 newFinishPos = new Vector3(
-            waterBounds.min.x + (waterBounds.size.x * finishOffset.x),
-            0f,
-            waterBounds.min.z + (waterBounds.size.z * (0.5f + finishOffset.y))
-        );
-        
-        finishPoint.position = newFinishPos;
-        DebugLog($"Auto-positioned finish point at: {newFinishPos}");
+        GenerateLevel();
     }
     
     public void GenerateLevel()
     {
         ClearLevel();
         
-        DebugLog($"Starting level generation with bounds: {waterBounds}");
+        // Generate S-path
+        generatedPath = GenerateSPath();
         
-        SpawnObstacles();
-        SpawnWhales();
-        SpawnOctopuses();
-        SpawnTreasures();
+        if (generatedPath.Count == 0)
+        {
+            DebugLog("ERROR: Failed to generate path!");
+            return;
+        }
+        
+        DebugLog($"Generated S-path with {generatedPath.Count} points");
+        
+        // Spawn objects along path
+        SpawnObstaclesAlongPath();
+        SpawnTreasuresAlongPath();
         
         DebugLog($"Level generated - Obstacles: {spawnedObstacles.Count}, Treasures: {spawnedTreasures.Count}, Total Score: {totalPossibleScore}");
     }
     
-    private void SpawnObstacles()
+    private List<Vector3> GenerateSPath()
     {
-        if (obstaclePrefabs == null || obstaclePrefabs.Length == 0) 
+        List<Vector3> path = new List<Vector3>();
+        
+        if (boatStartPosition == null || finishPoint == null)
         {
-            DebugLog("No obstacle prefabs assigned!");
-            return;
+            DebugLog("ERROR: Start or finish position not assigned!");
+            return path;
         }
         
-        int obstacleCount = Random.Range(minObstacles, maxObstacles + 1);
-        DebugLog($"Attempting to spawn {obstacleCount} obstacles");
+        Vector3 startPos = boatStartPosition.position;
+        Vector3 endPos = finishPoint.position;
+        float distance = Vector3.Distance(startPos, endPos);
         
-        int successfulSpawns = 0;
-        
-        for (int i = 0; i < obstacleCount; i++)
+        // Use levelLength if finish point is too close
+        if (distance < levelLength * 0.5f)
         {
-            GameObject obstaclePrefab = obstaclePrefabs[Random.Range(0, obstaclePrefabs.Length)];
-            Vector3 spawnPos = GetPredictiveSpawnPosition(obstaclePrefab, 0.0f); // Regular obstacles at water surface
+            endPos = startPos + boatStartPosition.forward * levelLength;
+        }
+        
+        // Add randomization to path parameters
+        float actualAmplitude = pathAmplitude * Random.Range(0.7f, 1.3f);
+        float actualFrequency = pathFrequency * Random.Range(0.7f, 1.3f);
+        float phaseShift = Random.Range(0f, Mathf.PI * 2f);
+        
+        for (int i = 0; i < pathResolution; i++)
+        {
+            float progress = (float)i / (pathResolution - 1);
             
-            if (spawnPos == Vector3.zero) 
+            // Linear interpolation between start and end
+            Vector3 basePoint = Vector3.Lerp(startPos, endPos, progress);
+            
+            // Add S-curve variation
+            float sValue = Mathf.Sin(progress * Mathf.PI * 2f * actualFrequency + phaseShift);
+            float amplitudeAtProgress = pathVariationCurve.Evaluate(progress) * actualAmplitude;
+            
+            // Apply perpendicular offset
+            Vector3 direction = (endPos - startPos).normalized;
+            Vector3 perpendicular = Vector3.Cross(direction, Vector3.up).normalized;
+            
+            Vector3 pathPoint = basePoint + perpendicular * sValue * amplitudeAtProgress;
+            path.Add(pathPoint);
+        }
+        
+        return path;
+    }
+    
+    private void SpawnObstaclesAlongPath()
+    {
+        if (generatedPath.Count == 0) return;
+        
+        // Spawn whales
+        SpawnObstacleType(whalePrefab, numWhales, whaleScale, whaleRotation, "whale");
+        
+        // Spawn octopuses
+        SpawnObstacleType(octopusPrefab, numOctopuses, octopusScale, octopusRotation, "octopus");
+    }
+    
+    private void SpawnObstacleType(GameObject prefab, int count, float scale, Vector3 baseRotation, string typeName)
+    {
+        if (prefab == null || count == 0) return;
+        
+        float pathLength = generatedPath.Count - 1;
+        float segmentLength = pathLength / (count + 1);
+        
+        for (int i = 1; i <= count; i++)
+        {
+            // Find position along path
+            float pathProgress = i * segmentLength;
+            int pathIndex = Mathf.FloorToInt(pathProgress);
+            float localProgress = pathProgress - pathIndex;
+            
+            // Get path point
+            Vector3 pathPoint;
+            if (pathIndex >= generatedPath.Count - 1)
             {
-                DebugLog($"Failed to find spawn position for obstacle {i + 1}");
-                continue;
+                pathPoint = generatedPath[generatedPath.Count - 1];
+            }
+            else
+            {
+                pathPoint = Vector3.Lerp(generatedPath[pathIndex], generatedPath[pathIndex + 1], localProgress);
             }
             
-            try
+            // Find spawn position near path
+            Vector3 spawnPos = FindValidObstaclePosition(pathPoint, pathIndex);
+            
+            if (spawnPos != Vector3.zero)
             {
-                GameObject obstacle = Instantiate(obstaclePrefab, spawnPos, GetRandomRotation());
+                // Calculate rotation with variance
+                Quaternion rotation = CalculateObjectRotation(baseRotation);
+                
+                GameObject obstacle = Instantiate(prefab, spawnPos, rotation);
                 obstacle.transform.parent = transform;
+                
+                // Apply scale
+                obstacle.transform.localScale = Vector3.one * scale;
                 
                 if (enableMovement)
                 {
                     SetupObstacleMovement(obstacle);
                 }
                 
+                SetupObstacleLookAt(obstacle);
+                
                 spawnedObstacles.Add(obstacle);
                 usedPositions.Add(spawnPos);
-                successfulSpawns++;
                 
-                DebugLog($"Successfully spawned obstacle {obstacle.name} at {spawnPos}");
-            }
-            catch (System.Exception e)
-            {
-                DebugLog($"Error spawning obstacle: {e.Message}");
+                DebugLog($"Spawned {typeName} at {spawnPos} with scale {scale} and rotation {rotation.eulerAngles}");
             }
         }
-        
-        DebugLog($"Total obstacles spawned: {successfulSpawns}/{obstacleCount}");
-    }
-
-    private void SpawnWhales()
-    {
-        if (whalePrefabs == null || whalePrefabs.Length == 0) 
-        {
-            DebugLog("No whale prefabs assigned!");
-            return;
-        }
-        
-        int whaleCount = Random.Range(minWhales, maxWhales + 1);
-        DebugLog($"Attempting to spawn {whaleCount} whales");
-        
-        int successfulSpawns = 0;
-        
-        for (int i = 0; i < whaleCount; i++)
-        {
-            GameObject whalePrefab = whalePrefabs[Random.Range(0, whalePrefabs.Length)];
-            Vector3 spawnPos = GetWhaleSpawnPosition();
-            
-            if (spawnPos == Vector3.zero) 
-            {
-                DebugLog($"Failed to find spawn position for whale {i + 1}");
-                continue;
-            }
-            
-            try
-            {
-                // Set the correct depth for whales
-                spawnPos.y = whaleDepth;
-                
-                GameObject whale = Instantiate(whalePrefab, spawnPos, GetRandomRotation());
-                whale.transform.parent = transform;
-                
-                // Whales have their own AI, but still initialize movement
-                if (enableMovement)
-                {
-                    SetupObstacleMovement(whale);
-                }
-                
-                spawnedObstacles.Add(whale);
-                usedPositions.Add(spawnPos);
-                successfulSpawns++;
-                
-                DebugLog($"Successfully spawned whale at {spawnPos}");
-            }
-            catch (System.Exception e)
-            {
-                DebugLog($"Error spawning whale: {e.Message}");
-            }
-        }
-        
-        DebugLog($"Total whales spawned: {successfulSpawns}/{whaleCount}");
-    }
-
-    private void SpawnOctopuses()
-    {
-        if (octopusPrefabs == null || octopusPrefabs.Length == 0) 
-        {
-            DebugLog("No octopus prefabs assigned!");
-            return;
-        }
-        
-        int octopusCount = Random.Range(minOctopuses, maxOctopuses + 1);
-        DebugLog($"Attempting to spawn {octopusCount} octopuses");
-        
-        int successfulSpawns = 0;
-        
-        for (int i = 0; i < octopusCount; i++)
-        {
-            GameObject octopusPrefab = octopusPrefabs[Random.Range(0, octopusPrefabs.Length)];
-            Vector3 spawnPos = GetPredictiveSpawnPosition(octopusPrefab, octopusDepth);
-            
-            if (spawnPos == Vector3.zero) 
-            {
-                DebugLog($"Failed to find spawn position for octopus {i + 1}");
-                continue;
-            }
-            
-            try
-            {
-                GameObject octopus = Instantiate(octopusPrefab, spawnPos, GetRandomRotation());
-                octopus.transform.parent = transform;
-                
-                if (enableMovement)
-                {
-                    SetupObstacleMovement(octopus);
-                }
-                
-                spawnedObstacles.Add(octopus);
-                usedPositions.Add(spawnPos);
-                successfulSpawns++;
-                
-                DebugLog($"Successfully spawned octopus at {spawnPos}");
-            }
-            catch (System.Exception e)
-            {
-                DebugLog($"Error spawning octopus: {e.Message}");
-            }
-        }
-        
-        DebugLog($"Total octopuses spawned: {successfulSpawns}/{octopusCount}");
     }
     
-    private Vector3 GetPredictiveSpawnPosition(GameObject prefab, float depth)
+    private Vector3 FindValidObstaclePosition(Vector3 pathPoint, int pathIndex)
     {
-        if (boatStartPosition == null) return Vector3.zero;
-        
-        bool isWhale = prefab.GetComponent<WhaleObstacle>() != null;
-        int maxAttempts = 100;
-        float minSpacingToUse = isWhale ? minObstacleSpacing : minSpacing;
-        
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        // Calculate path direction
+        Vector3 pathDirection = Vector3.forward;
+        if (pathIndex > 0 && pathIndex < generatedPath.Count - 1)
         {
-            Vector3 spawnPos;
+            pathDirection = (generatedPath[pathIndex + 1] - generatedPath[pathIndex - 1]).normalized;
+        }
+        
+        Vector3 perpendicular = Vector3.Cross(pathDirection, Vector3.up).normalized;
+        
+        for (int attempt = 0; attempt < maxSpawnAttempts; attempt++)
+        {
+            // Random side and distance
+            float side = Random.Range(0f, 1f) > 0.5f ? 1f : -1f;
+            float distance = obstacleDistanceFromPath + Random.Range(-10f, 15f);
             
-            if (isWhale)
+            Vector3 testPos = pathPoint + perpendicular * side * distance;
+            testPos.y = pathPoint.y; // Keep same height as path
+            
+            if (IsValidSpawnPosition(testPos))
             {
-                spawnPos = GetWhaleSpawnPosition();
+                return testPos;
+            }
+            
+            // Try opposite side if first side fails
+            if (attempt == maxSpawnAttempts / 2)
+            {
+                side *= -1f;
+            }
+        }
+        
+        return Vector3.zero;
+    }
+    
+    private void SpawnTreasuresAlongPath()
+    {
+        if (generatedPath.Count == 0 || treasurePrefab == null) return;
+        
+        float pathLength = generatedPath.Count - 1;
+        float segmentLength = pathLength / (numTreasures + 1);
+        
+        for (int i = 1; i <= numTreasures; i++)
+        {
+            // Offset treasures slightly from obstacles
+            float pathProgress = i * segmentLength * 0.9f;
+            int pathIndex = Mathf.FloorToInt(pathProgress);
+            float localProgress = pathProgress - pathIndex;
+            
+            // Get path point
+            Vector3 pathPoint;
+            if (pathIndex >= generatedPath.Count - 1)
+            {
+                pathPoint = generatedPath[generatedPath.Count - 1];
             }
             else
             {
-                // Regular obstacles - random within bounds
-                spawnPos = new Vector3(
-                    Random.Range(waterBounds.min.x + spawnMargin, waterBounds.max.x - spawnMargin),
-                    depth, // Use specified depth parameter
-                    Random.Range(waterBounds.min.z + spawnMargin, waterBounds.max.z - spawnMargin)
-                );
+                pathPoint = Vector3.Lerp(generatedPath[pathIndex], generatedPath[pathIndex + 1], localProgress);
             }
             
-            if (IsValidSpawnPosition(spawnPos, minSpacingToUse))
-            {
-                DebugLog($"Found valid spawn position at attempt {attempt + 1}: {spawnPos}");
-                return spawnPos;
-            }
-        }
-        
-        DebugLog($"Warning: Could not find valid spawn position after {maxAttempts} attempts");
-        return Vector3.zero;
-    }
-
-    private Vector3 GetWhaleSpawnPosition()
-    {
-        if (boatStartPosition == null) return Vector3.zero;
-        
-        // Spawn whales ahead of boat path
-        Vector3 boatForward = boatStartPosition.forward;
-        float distanceAhead = Random.Range(whaleSpawnMinDistance, whaleSpawnMaxDistance);
-        float lateralOffset = Random.Range(-whaleLateralSpread, whaleLateralSpread);
-        
-        Vector3 spawnPos = boatStartPosition.position + 
-                          boatForward * distanceAhead + 
-                          boatStartPosition.right * lateralOffset;
-        
-        // Depth is applied later
-        spawnPos.y = 0f;
-        
-        return spawnPos;
-    }
-    
-    [System.Serializable]
-    public class TreasureType
-    {
-        public string name = "Standard";
-        public int pointValue = 100;
-        public Color glowColor = Color.yellow;
-        [Range(0.5f, 2.0f)]
-        public float scale = 1.0f;
-        [Range(0.0f, 1.0f)]
-        public float spawnProbability = 1.0f;
-    }
-
-    [Header("Treasure Types")]
-    [SerializeField] private TreasureType[] treasureTypes = new TreasureType[]
-    {
-        new TreasureType { name = "Common", pointValue = 50, glowColor = Color.yellow, scale = 0.8f, spawnProbability = 0.7f },
-        new TreasureType { name = "Rare", pointValue = 100, glowColor = new Color(1f, 0.6f, 0f), scale = 1.0f, spawnProbability = 0.25f },
-        new TreasureType { name = "Legendary", pointValue = 200, glowColor = new Color(1f, 0f, 0.6f), scale = 1.2f, spawnProbability = 0.05f }
-    };
-    
-    private void SpawnTreasures()
-    {
-        if (treasurePrefab == null) 
-        {
-            DebugLog("ERROR: No treasure prefab assigned!");
-            return;
-        }
-        
-        if (treasureTypes == null || treasureTypes.Length == 0)
-        {
-            DebugLog("WARNING: No treasure types defined! Using default values.");
-            treasureTypes = new TreasureType[] { new TreasureType() };
-        }
-        
-        int treasureCount = Random.Range(minTreasures, maxTreasures + 1);
-        DebugLog($"Attempting to spawn {treasureCount} treasures");
-        
-        int successfulSpawns = 0;
-        
-        for (int i = 0; i < treasureCount; i++)
-        {
-            Vector3 spawnPos = GetTreasureSpawnPosition();
-            if (spawnPos == Vector3.zero) 
-            {
-                DebugLog($"Failed to find spawn position for treasure {i + 1}");
-                continue;
-            }
+            // Find spawn position closer to path center
+            Vector3 spawnPos = FindValidTreasurePosition(pathPoint, pathIndex);
             
-            try
+            if (spawnPos != Vector3.zero)
             {
-                // Select treasure type based on probability
-                TreasureType selectedType = SelectTreasureType();
+                // Calculate rotation with variance
+                Quaternion rotation = CalculateObjectRotation(treasureRotation);
                 
-                GameObject treasure = Instantiate(treasurePrefab, spawnPos, Quaternion.identity);
+                GameObject treasure = Instantiate(treasurePrefab, spawnPos, rotation);
                 treasure.transform.parent = transform;
                 
-                // Apply scale based on treasure type
-                treasure.transform.localScale = Vector3.one * selectedType.scale;
+                // Apply scale
+                treasure.transform.localScale = Vector3.one * treasureScale;
                 
+                // Set treasure value
                 TreasureBox treasureBox = treasure.GetComponent<TreasureBox>();
                 if (treasureBox != null)
                 {
-                    // Set point value from treasure type
-                    treasureBox.pointValue = selectedType.pointValue;
-                    totalPossibleScore += selectedType.pointValue;
-                    
-                    // Apply visual customization if possible
-                    ParticleSystem collectEffect = treasureBox.GetComponent<ParticleSystem>();
-                    if (collectEffect != null)
-                    {
-                        var mainModule = collectEffect.main;
-                        mainModule.startColor = selectedType.glowColor;
-                    }
-                    
-                    // Try to find and color renderer materials if any
-                    Renderer treasureRenderer = treasureBox.GetComponentInChildren<Renderer>();
-                    if (treasureRenderer != null)
-                    {
-                        // Find emission material if available
-                        foreach (Material mat in treasureRenderer.materials)
-                        {
-                            if (mat.HasProperty("_EmissionColor"))
-                            {
-                                mat.SetColor("_EmissionColor", selectedType.glowColor * 0.5f);
-                            }
-                        }
-                    }
-                    
-                    DebugLog($"Treasure spawned: Type={selectedType.name}, Value={selectedType.pointValue}, Scale={selectedType.scale}");
+                    int pointValue = treasureValues[Random.Range(0, treasureValues.Length)];
+                    treasureBox.pointValue = pointValue;
+                    totalPossibleScore += pointValue;
                 }
                 
                 spawnedTreasures.Add(treasure);
                 usedPositions.Add(spawnPos);
-                successfulSpawns++;
-            }
-            catch (System.Exception e)
-            {
-                DebugLog($"Error spawning treasure: {e.Message}");
+                
+                DebugLog($"Spawned treasure at {spawnPos} with scale {treasureScale} and rotation {rotation.eulerAngles}");
             }
         }
-        
-        DebugLog($"Total treasures spawned: {successfulSpawns}/{treasureCount}");
     }
     
-    private TreasureType SelectTreasureType()
+    private Vector3 FindValidTreasurePosition(Vector3 pathPoint, int pathIndex)
     {
-        // Calculate total probability
-        float totalProbability = 0f;
-        foreach (TreasureType type in treasureTypes)
+        // Calculate path direction
+        Vector3 pathDirection = Vector3.forward;
+        if (pathIndex > 0 && pathIndex < generatedPath.Count - 1)
         {
-            totalProbability += type.spawnProbability;
+            pathDirection = (generatedPath[pathIndex + 1] - generatedPath[pathIndex - 1]).normalized;
         }
         
-        // If total probability is 0, return first type
-        if (totalProbability <= 0f)
+        Vector3 perpendicular = Vector3.Cross(pathDirection, Vector3.up).normalized;
+        
+        for (int attempt = 0; attempt < maxSpawnAttempts; attempt++)
         {
-            return treasureTypes[0];
-        }
-        
-        // Select random value based on probabilities
-        float randomValue = Random.Range(0f, totalProbability);
-        float currentProbability = 0f;
-        
-        // Find which treasure type was selected
-        foreach (TreasureType type in treasureTypes)
-        {
-            currentProbability += type.spawnProbability;
-            if (randomValue <= currentProbability)
-            {
-                return type;
-            }
-        }
-        
-        // Fallback to first type
-        return treasureTypes[0];
-    }
-    
-    private Vector3 GetTreasureSpawnPosition()
-    {
-        int maxAttempts = 100;
-        
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            Vector3 spawnPos = new Vector3(
-                Random.Range(waterBounds.min.x + spawnMargin, waterBounds.max.x - spawnMargin),
-                treasureHeight, // Use the specified treasure height
-                Random.Range(waterBounds.min.z + spawnMargin, waterBounds.max.z - spawnMargin)
-            );
+            // Random position within path width
+            float offsetDistance = Random.Range(-pathWidth * 0.7f, pathWidth * 0.7f);
+            Vector3 testPos = pathPoint + perpendicular * offsetDistance;
+            testPos.y = pathPoint.y + 0.2f; // Slightly above water
             
-            if (IsValidSpawnPosition(spawnPos, minSpacing))
+            if (IsValidSpawnPosition(testPos))
             {
-                return spawnPos;
+                return testPos;
             }
         }
         
         return Vector3.zero;
     }
     
-    private bool IsValidSpawnPosition(Vector3 position, float minDistance)
+    private bool IsValidSpawnPosition(Vector3 position)
     {
         // Check against finish point
-        if (finishPoint != null && Vector3.Distance(position, finishPoint.position) < finishIslandRadius)
+        if (finishPoint != null && Vector3.Distance(position, finishPoint.position) < 15f)
         {
             return false;
         }
         
-        // Check against boat start position (reduced distance check)
-        if (boatStartPosition != null && Vector3.Distance(position, boatStartPosition.position) < minDistance * 0.5f)
+        // Check against boat start
+        if (boatStartPosition != null && Vector3.Distance(position, boatStartPosition.position) < minSpacing * 0.5f)
         {
             return false;
         }
@@ -545,7 +344,7 @@ public class LevelManager : MonoBehaviour
         // Check against all used positions
         foreach (Vector3 usedPos in usedPositions)
         {
-            if (Vector3.Distance(position, usedPos) < minDistance)
+            if (Vector3.Distance(position, usedPos) < minSpacing)
             {
                 return false;
             }
@@ -554,9 +353,19 @@ public class LevelManager : MonoBehaviour
         return true;
     }
     
-    private Quaternion GetRandomRotation()
+    private Quaternion CalculateObjectRotation(Vector3 baseRotation)
     {
-        return Quaternion.Euler(0, Random.Range(0f, 360f), 0);
+        Vector3 finalRotation = baseRotation;
+        
+        if (randomizeRotations)
+        {
+            // Add random variance to each axis
+            finalRotation.x += Random.Range(-rotationVariance, rotationVariance);
+            finalRotation.y += Random.Range(-rotationVariance, rotationVariance);
+            finalRotation.z += Random.Range(-rotationVariance, rotationVariance);
+        }
+        
+        return Quaternion.Euler(finalRotation);
     }
     
     private void SetupObstacleMovement(GameObject obstacle)
@@ -574,15 +383,61 @@ public class LevelManager : MonoBehaviour
             ).normalized;
             
             obstacleBase.SetMoveDirection(randomDir);
-            
-            // Set spawn area boundaries for obstacle movement constraints
-            obstacleBase.SetBoundaryConstraints(
-                spawnAreaCenter,
-                spawnAreaSize,
-                spawnAreaSize.magnitude * 0.5f
-            );
-            
-            DebugLog($"Movement setup for {obstacle.name} - Speed: {obstacleBase.GetMoveSpeed()}, Dir: {randomDir}");
+        }
+    }
+    
+    private void SetupObstacleLookAt(GameObject obstacle)
+    {
+        // Can be implemented if needed for specific behaviors
+        DebugLog($"Set up obstacle: {obstacle.name}");
+    }
+    
+    // Runtime adjustment methods
+    public void UpdateWhaleScale(float newScale)
+    {
+        whaleScale = Mathf.Clamp(newScale, 0.1f, 5.0f);
+        UpdateObjectScales(whalePrefab, whaleScale);
+    }
+    
+    public void UpdateOctopusScale(float newScale)
+    {
+        octopusScale = Mathf.Clamp(newScale, 0.1f, 5.0f);
+        UpdateObjectScales(octopusPrefab, octopusScale);
+    }
+    
+    public void UpdateTreasureScale(float newScale)
+    {
+        treasureScale = Mathf.Clamp(newScale, 0.1f, 5.0f);
+        UpdateObjectScales(treasurePrefab, treasureScale);
+    }
+    
+    private void UpdateObjectScales(GameObject prefab, float scale)
+    {
+        if (prefab == null) return;
+        
+        List<GameObject> objectsToUpdate = new List<GameObject>();
+        
+        if (prefab == whalePrefab)
+        {
+            objectsToUpdate.AddRange(spawnedObstacles.FindAll(obj => 
+                obj.GetComponent<WhaleObstacle>() != null));
+        }
+        else if (prefab == octopusPrefab)
+        {
+            objectsToUpdate.AddRange(spawnedObstacles.FindAll(obj => 
+                obj.GetComponent<OctopusObstacle>() != null));
+        }
+        else if (prefab == treasurePrefab)
+        {
+            objectsToUpdate.AddRange(spawnedTreasures);
+        }
+        
+        foreach (GameObject obj in objectsToUpdate)
+        {
+            if (obj != null)
+            {
+                obj.transform.localScale = Vector3.one * scale;
+            }
         }
     }
     
@@ -613,6 +468,7 @@ public class LevelManager : MonoBehaviour
         spawnedObstacles.Clear();
         spawnedTreasures.Clear();
         usedPositions.Clear();
+        generatedPath.Clear();
         totalPossibleScore = 0;
         
         DebugLog("Level cleared");
@@ -621,14 +477,6 @@ public class LevelManager : MonoBehaviour
     [ContextMenu("Generate Level (Manual)")]
     public void ManualGenerateLevel()
     {
-        if (!Application.isPlaying)
-        {
-            InitializeWaterBounds();
-            if (autoDetectWaterBounds)
-            {
-                AutoPositionFinishPoint();
-            }
-        }
         GenerateLevel();
     }
     
@@ -639,10 +487,10 @@ public class LevelManager : MonoBehaviour
     }
     
     // Public getters
+    public List<Vector3> GetGeneratedPath() => generatedPath;
     public List<GameObject> GetSpawnedObstacles() => spawnedObstacles;
     public List<GameObject> GetSpawnedTreasures() => spawnedTreasures;
     public int GetTotalPossibleScore() => totalPossibleScore;
-    public Bounds GetWaterBounds() => waterBounds;
     
     private void DebugLog(string message)
     {
@@ -656,74 +504,47 @@ public class LevelManager : MonoBehaviour
     {
         if (!showGizmos) return;
         
-        // Draw fixed spawn area
-        Gizmos.color = Color.blue;
-        Gizmos.DrawWireCube(spawnAreaCenter, spawnAreaSize);
-        
-        // Draw whale spawn zone
-        if (boatStartPosition != null)
+        // Draw generated S-path
+        if (generatedPath.Count > 1)
         {
-            Gizmos.color = Color.red;
-            Vector3 boatForward = boatStartPosition.forward;
-            Vector3 whaleZoneStart = boatStartPosition.position + boatForward * whaleSpawnMinDistance;
-            Vector3 whaleZoneEnd = boatStartPosition.position + boatForward * whaleSpawnMaxDistance;
+            Gizmos.color = Color.blue;
+            for (int i = 0; i < generatedPath.Count - 1; i++)
+            {
+                Gizmos.DrawLine(generatedPath[i], generatedPath[i + 1]);
+            }
             
-            // Draw whale spawn corridor
-            Vector3 left = boatStartPosition.right * -whaleLateralSpread;
-            Vector3 right = boatStartPosition.right * whaleLateralSpread;
-            
-            Gizmos.DrawLine(whaleZoneStart + left, whaleZoneStart + right);
-            Gizmos.DrawLine(whaleZoneEnd + left, whaleZoneEnd + right);
-            Gizmos.DrawLine(whaleZoneStart + left, whaleZoneEnd + left);
-            Gizmos.DrawLine(whaleZoneStart + right, whaleZoneEnd + right);
-            
-            // Draw underwater indicator
-            Vector3 whaleDepthPos = whaleZoneStart + boatForward * whaleSpawnMaxDistance * 0.5f;
-            whaleDepthPos.y = whaleDepth;
-            Gizmos.DrawWireSphere(whaleDepthPos, 2f);
-            Gizmos.DrawLine(whaleDepthPos, new Vector3(whaleDepthPos.x, 0, whaleDepthPos.z));
-        }
-        
-        // Draw octopus depth level
-        if (spawnedObstacles.Count > 0)
-        {
-            Gizmos.color = new Color(1f, 0.5f, 0f, 0.5f); // Orange
-            Vector3 octopusDepthPos = spawnAreaCenter;
-            octopusDepthPos.y = octopusDepth;
-            Gizmos.DrawWireSphere(octopusDepthPos, 2f);
-            Gizmos.DrawLine(octopusDepthPos, new Vector3(octopusDepthPos.x, 0, octopusDepthPos.z));
-        }
-        
-        // Draw treasure height level
-        if (spawnedTreasures.Count > 0)
-        {
-            Gizmos.color = new Color(1f, 1f, 0f, 0.5f); // Yellow
-            Vector3 treasureHeightPos = spawnAreaCenter;
-            treasureHeightPos.y = treasureHeight;
-            treasureHeightPos.x += 5f; // Offset for clarity
-            Gizmos.DrawWireSphere(treasureHeightPos, 1f);
-            Gizmos.DrawLine(treasureHeightPos, new Vector3(treasureHeightPos.x, 0, treasureHeightPos.z));
+            // Draw path width boundaries
+            Gizmos.color = Color.cyan;
+            for (int i = 0; i < generatedPath.Count - 1; i++)
+            {
+                Vector3 direction = (generatedPath[i + 1] - generatedPath[i]).normalized;
+                Vector3 perpendicular = Vector3.Cross(direction, Vector3.up).normalized;
+                
+                Vector3 leftBound = generatedPath[i] + perpendicular * pathWidth;
+                Vector3 rightBound = generatedPath[i] - perpendicular * pathWidth;
+                
+                Gizmos.DrawLine(leftBound, rightBound);
+            }
         }
         
         // Draw spawn positions
-        Gizmos.color = Color.yellow;
         foreach (Vector3 pos in usedPositions)
         {
-            Gizmos.DrawWireSphere(pos, 1f);
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(pos, 2f);
         }
         
-        // Draw finish island area
-        if (finishPoint != null)
-        {
-            Gizmos.color = Color.green;
-            Gizmos.DrawWireSphere(finishPoint.position, finishIslandRadius);
-        }
-        
-        // Draw start area
+        // Draw start and finish
         if (boatStartPosition != null)
         {
-            Gizmos.color = Color.white;
-            Gizmos.DrawWireSphere(boatStartPosition.position, 2f);
+            Gizmos.color = Color.green;
+            Gizmos.DrawWireSphere(boatStartPosition.position, 3f);
+        }
+        
+        if (finishPoint != null)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireSphere(finishPoint.position, 3f);
         }
     }
 }

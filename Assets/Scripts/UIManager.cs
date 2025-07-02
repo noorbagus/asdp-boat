@@ -8,6 +8,7 @@ public class UIManager : MonoBehaviour
 {
     [Header("UI References")]
     [SerializeField] private TextMeshProUGUI scoreText;
+    [SerializeField] private TextMeshProUGUI livesText;
     [SerializeField] private TextMeshProUGUI connectionStatusText;
     [SerializeField] private TextMeshProUGUI timerText;
     [SerializeField] private Slider healthBar;
@@ -27,6 +28,7 @@ public class UIManager : MonoBehaviour
     {
         // Initialize UI elements
         UpdateScore(0);
+        UpdateLives(5); // Initialize with max lives
         UpdateConnectionStatus("Disconnected");
         
         if (healthBar != null)
@@ -87,7 +89,29 @@ public class UIManager : MonoBehaviour
     {
         if (scoreText != null)
         {
-            scoreText.text = "Score: " + score.ToString();
+            scoreText.text = score.ToString();
+        }
+    }
+    
+    public void UpdateLives(int lives)
+    {
+        if (livesText != null)
+        {
+            livesText.text = $"{lives}/5";
+            
+            // Change color based on lives
+            if (lives <= 1)
+            {
+                livesText.color = Color.red;
+            }
+            else if (lives <= 2)
+            {
+                livesText.color = Color.yellow;
+            }
+            else
+            {
+                livesText.color = Color.white;
+            }
         }
     }
     

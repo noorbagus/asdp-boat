@@ -1,34 +1,46 @@
 using UnityEngine;
+using System.Collections.Generic;
+
+public enum AnimationType
+{
+    PingPong,    // 0->100->0->100
+    Loop,        // 0->100->0->100 (reset to 0)
+    Sine,        // Smooth sine wave
+    Random       // Random values
+}
+
+[System.Serializable]
+public class BlendshapeData
+{
+    public string name;
+    public int index;
+    public float speed = 1f;
+    public float minValue = 0f;
+    public float maxValue = 100f;
+    public AnimationType animationType = AnimationType.PingPong;
+    public bool enabled = true;
+    
+    [HideInInspector] public float currentTime = 0f;
+}
 
 public class BlendshapeLooper : MonoBehaviour
 {
     [Header("Blendshape Settings")]
     [SerializeField] private SkinnedMeshRenderer skinnedMeshRenderer;
-    [SerializeField] private int blendshapeIndex = 0;
-    [SerializeField] private float speed = 1f;
-    [SerializeField] private float minValue = 0f;
-    [SerializeField] private float maxValue = 100f;
+    [SerializeField] private List<BlendshapeData> blendshapes = new List<BlendshapeData>();
     
-    [Header("Animation Type")]
-    [SerializeField] private AnimationType animationType = AnimationType.PingPong;
+    [Header("Global Settings")]
+    [SerializeField] private float globalSpeedMultiplier = 1f;
+    [SerializeField] private bool playAll = true;
     
     [Header("Debug")]
     [SerializeField] private bool showDebugInfo = true;
     
-    public enum AnimationType
-    {
-        PingPong,    // 0->100->0->100
-        Loop,        // 0->100->0->100 (reset to 0)
-        Sine         // Smooth sine wave
-    }
-    
-    private float currentTime = 0f;
     private Mesh skinnedMesh;
     private int blendShapeCount;
     
     private void Awake()
     {
-        // Get SkinnedMeshRenderer component
         if (skinnedMeshRenderer == null)
             skinnedMeshRenderer = GetComponent<SkinnedMeshRenderer>();
             
@@ -38,155 +50,155 @@ public class BlendshapeLooper : MonoBehaviour
     
     private void Start()
     {
-        // DON'T disable Animator - let bones work normally
+        if (!ValidateComponents()) return;
         
-        // Validation checks
+        blendShapeCount = skinnedMesh.blendShapeCount;
+        
+        if (showDebugInfo)
+        {
+            Debug.Log($"[BlendshapeLooper] Started with {blendShapeCount} blendshapes");
+        }
+    }
+    
+    private bool ValidateComponents()
+    {
         if (skinnedMeshRenderer == null)
         {
-            if (showDebugInfo) Debug.LogError($"[BlendshapeLooper] No SkinnedMeshRenderer found on {gameObject.name}!");
+            if (showDebugInfo) Debug.LogError("[BlendshapeLooper] No SkinnedMeshRenderer found!");
             enabled = false;
-            return;
+            return false;
         }
         
         if (skinnedMesh == null)
         {
-            if (showDebugInfo) Debug.LogError($"[BlendshapeLooper] No mesh found on SkinnedMeshRenderer!");
+            if (showDebugInfo) Debug.LogError("[BlendshapeLooper] No mesh found!");
             enabled = false;
-            return;
+            return false;
         }
         
-        blendShapeCount = skinnedMesh.blendShapeCount;
-        
-        if (blendShapeCount == 0)
-        {
-            if (showDebugInfo) Debug.LogError($"[BlendshapeLooper] No blendshapes found in mesh!");
-            enabled = false;
-            return;
-        }
-        
-        if (blendshapeIndex >= blendShapeCount || blendshapeIndex < 0)
-        {
-            if (showDebugInfo) Debug.LogError($"[BlendshapeLooper] Blendshape index {blendshapeIndex} is invalid! Available: 0-{blendShapeCount - 1}");
-            enabled = false;
-            return;
-        }
-        
-        // Debug info
-        if (showDebugInfo)
-        {
-            Debug.Log($"[BlendshapeLooper] Started on {gameObject.name}");
-            Debug.Log($"[BlendshapeLooper] Total blendshapes: {blendShapeCount}");
-            Debug.Log($"[BlendshapeLooper] Using blendshape {blendshapeIndex}: {skinnedMesh.GetBlendShapeName(blendshapeIndex)}");
-            
-            // List all available blendshapes
-            for (int i = 0; i < blendShapeCount; i++)
-            {
-                Debug.Log($"[BlendshapeLooper] Available blendshape {i}: {skinnedMesh.GetBlendShapeName(i)}");
-            }
-        }
+        return true;
     }
     
     private void Update()
     {
-        if (skinnedMeshRenderer == null || !enabled) return;
+        if (!enabled || !playAll) return;
         
-        currentTime += Time.deltaTime * speed;
-        
-        float blendValue = CalculateBlendValue();
-        skinnedMeshRenderer.SetBlendShapeWeight(blendshapeIndex, blendValue);
-        
-        // Debug current value every second
-        if (showDebugInfo && Time.time % 1f < Time.deltaTime)
+        foreach (var blend in blendshapes)
         {
-            Debug.Log($"[BlendshapeLooper] Current blend value: {blendValue:F2}");
+            if (!blend.enabled) continue;
+            
+            blend.currentTime += Time.deltaTime * blend.speed * globalSpeedMultiplier;
+            
+            float blendValue = CalculateBlendValue(blend);
+            skinnedMeshRenderer.SetBlendShapeWeight(blend.index, blendValue);
         }
     }
     
     private void LateUpdate()
     {
-        // Override blendshape after Animator updates
-        if (skinnedMeshRenderer != null && enabled)
+        if (!enabled || !playAll) return;
+        
+        // Override after Animator
+        foreach (var blend in blendshapes)
         {
-            float blendValue = CalculateBlendValue();
-            skinnedMeshRenderer.SetBlendShapeWeight(blendshapeIndex, blendValue);
+            if (!blend.enabled) continue;
+            
+            float blendValue = CalculateBlendValue(blend);
+            skinnedMeshRenderer.SetBlendShapeWeight(blend.index, blendValue);
         }
     }
     
-    private float CalculateBlendValue()
+    private float CalculateBlendValue(BlendshapeData blend)
     {
-        switch (animationType)
+        switch (blend.animationType)
         {
             case AnimationType.PingPong:
-                return Mathf.Lerp(minValue, maxValue, Mathf.PingPong(currentTime, 1f));
+                return Mathf.Lerp(blend.minValue, blend.maxValue, Mathf.PingPong(blend.currentTime, 1f));
                 
             case AnimationType.Loop:
-                return Mathf.Lerp(minValue, maxValue, currentTime % 1f);
+                return Mathf.Lerp(blend.minValue, blend.maxValue, blend.currentTime % 1f);
                 
             case AnimationType.Sine:
-                return Mathf.Lerp(minValue, maxValue, (Mathf.Sin(currentTime) + 1f) * 0.5f);
+                return Mathf.Lerp(blend.minValue, blend.maxValue, (Mathf.Sin(blend.currentTime) + 1f) * 0.5f);
+                
+            case AnimationType.Random:
+                if (Time.fixedTime % 0.1f < Time.fixedDeltaTime) // Update every 0.1s
+                    return Random.Range(blend.minValue, blend.maxValue);
+                return skinnedMeshRenderer.GetBlendShapeWeight(blend.index);
                 
             default:
-                return minValue;
+                return blend.minValue;
         }
     }
     
-    // Manual testing methods
-    [ContextMenu("Test Blendshape Max")]
-    public void TestBlendshapeMax()
+    // Auto-detect and populate blendshapes
+    [ContextMenu("Auto Setup All Blendshapes")]
+    public void AutoSetupBlendshapes()
     {
-        if (skinnedMeshRenderer != null)
+        if (skinnedMesh == null) return;
+        
+        blendshapes.Clear();
+        
+        for (int i = 0; i < skinnedMesh.blendShapeCount; i++)
         {
-            skinnedMeshRenderer.SetBlendShapeWeight(blendshapeIndex, maxValue);
-            if (showDebugInfo) Debug.Log($"[BlendshapeLooper] Manual test: Set to {maxValue}");
+            blendshapes.Add(new BlendshapeData
+            {
+                name = skinnedMesh.GetBlendShapeName(i),
+                index = i,
+                speed = Random.Range(0.5f, 2f),
+                animationType = (AnimationType)Random.Range(0, 3)
+            });
         }
-    }
-    
-    [ContextMenu("Test Blendshape Min")]
-    public void TestBlendshapeMin()
-    {
-        if (skinnedMeshRenderer != null)
-        {
-            skinnedMeshRenderer.SetBlendShapeWeight(blendshapeIndex, minValue);
-            if (showDebugInfo) Debug.Log($"[BlendshapeLooper] Manual test: Set to {minValue}");
-        }
+        
+        if (showDebugInfo)
+            Debug.Log($"[BlendshapeLooper] Auto-setup {blendshapes.Count} blendshapes");
     }
     
     [ContextMenu("List All Blendshapes")]
     public void ListAllBlendshapes()
     {
-        if (skinnedMesh != null)
+        if (skinnedMesh == null) return;
+        
+        Debug.Log($"[BlendshapeLooper] Available blendshapes:");
+        for (int i = 0; i < skinnedMesh.blendShapeCount; i++)
         {
-            Debug.Log($"[BlendshapeLooper] Listing all {skinnedMesh.blendShapeCount} blendshapes:");
-            for (int i = 0; i < skinnedMesh.blendShapeCount; i++)
-            {
-                Debug.Log($"  {i}: {skinnedMesh.GetBlendShapeName(i)}");
-            }
+            Debug.Log($"  {i}: {skinnedMesh.GetBlendShapeName(i)}");
         }
     }
     
-    // Public methods for runtime control
-    public void SetBlendshapeIndex(int index)
+    // Control methods
+    public void PlayBlendshape(int index)
     {
-        if (index >= 0 && index < blendShapeCount)
+        if (index < blendshapes.Count)
+            blendshapes[index].enabled = true;
+    }
+    
+    public void StopBlendshape(int index)
+    {
+        if (index < blendshapes.Count)
+            blendshapes[index].enabled = false;
+    }
+    
+    public void PlayAll()
+    {
+        playAll = true;
+    }
+    
+    public void StopAll()
+    {
+        playAll = false;
+    }
+    
+    public void ResetAll()
+    {
+        foreach (var blend in blendshapes)
         {
-            blendshapeIndex = index;
-            if (showDebugInfo) Debug.Log($"[BlendshapeLooper] Changed to blendshape {index}: {skinnedMesh.GetBlendShapeName(index)}");
+            blend.currentTime = 0f;
         }
     }
     
-    public void SetSpeed(float newSpeed)
+    public void SetGlobalSpeed(float speed)
     {
-        speed = newSpeed;
-    }
-    
-    public void SetRange(float min, float max)
-    {
-        minValue = min;
-        maxValue = max;
-    }
-    
-    public void ResetAnimation()
-    {
-        currentTime = 0f;
+        globalSpeedMultiplier = speed;
     }
 }
