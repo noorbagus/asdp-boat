@@ -1,8 +1,9 @@
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
-using Mediapipe;
 using Mediapipe.Unity;
+using Mediapipe.Tasks.Vision.PoseLandmarker;
+using Mediapipe.Tasks.Components.Containers;
 
 public class CameraBodyTracker : MonoBehaviour
 {
@@ -14,7 +15,7 @@ public class CameraBodyTracker : MonoBehaviour
     [SerializeField] private bool autoStartCamera = true;
     
     [Header("Detection Settings")]
-    [SerializeField] private float paddleThreshold = 0.05f; // Y position difference threshold
+    [SerializeField] private float paddleThreshold = 0.05f;
     [SerializeField] private float debounceTime = 0.3f;
     [SerializeField] private float confidenceThreshold = 0.7f;
     [SerializeField] private bool useFallbackToShoulders = true;
@@ -22,10 +23,9 @@ public class CameraBodyTracker : MonoBehaviour
     
     [Header("Visual Feedback")]
     [SerializeField] private bool showDebugOverlay = true;
-    [SerializeField] private bool drawPoseLandmarks = true;
-    [SerializeField] private Color leftHandColor = Color.red;
-    [SerializeField] private Color rightHandColor = Color.blue;
-    [SerializeField] private Color shoulderColor = Color.yellow;
+    [SerializeField] private UnityEngine.Color leftHandColor = UnityEngine.Color.red;
+    [SerializeField] private UnityEngine.Color rightHandColor = UnityEngine.Color.blue;
+    [SerializeField] private UnityEngine.Color shoulderColor = UnityEngine.Color.yellow;
     
     [Header("References")]
     [SerializeField] private BoatController boatController;
@@ -36,7 +36,7 @@ public class CameraBodyTracker : MonoBehaviour
     [SerializeField] private bool showPerformanceStats = true;
     
     // MediaPipe components
-    private PoseTracking poseTracking;
+    private PoseLandmarker poseLandmarker;
     private WebCamTexture webCamTexture;
     private Texture2D inputTexture;
     private bool isInitialized = false;
@@ -78,7 +78,6 @@ public class CameraBodyTracker : MonoBehaviour
     {
         DebugLog("Initializing Camera Body Tracker...");
         
-        // Find boat controller if not assigned
         if (boatController == null)
         {
             boatController = FindObjectOfType<BoatController>();
@@ -89,16 +88,12 @@ public class CameraBodyTracker : MonoBehaviour
             }
         }
         
-        // Find preview UI if not assigned
         if (previewUI == null)
         {
             previewUI = FindObjectOfType<CameraPreviewUI>();
         }
         
-        // Initialize pose detection data
         currentPoseData = new PoseDetectionData();
-        
-        // Get available cameras
         RefreshAvailableCameras();
         
         if (autoStartCamera)
@@ -119,7 +114,6 @@ public class CameraBodyTracker : MonoBehaviour
     
     private IEnumerator InitializeCameraAndMediaPipe()
     {
-        // Initialize MediaPipe
         yield return StartCoroutine(InitializeMediaPipe());
         
         if (!isInitialized)
@@ -129,21 +123,17 @@ public class CameraBodyTracker : MonoBehaviour
             yield break;
         }
         
-        // Start camera
         yield return StartCoroutine(StartCamera());
         
         if (isCameraActive)
         {
             DebugLog("✓ Camera Body Tracker initialized successfully");
             
-            // Set boat controller input mode
             if (boatController != null)
             {
-                // Add CameraBodyTracking to InputMode enum first
-                // boatController.SetInputMode(BoatController.InputMode.CameraBodyTracking);
+                boatController.SetInputMode(BoatController.InputMode.CameraBodyTracking);
             }
             
-            // Update preview UI
             if (previewUI != null)
             {
                 previewUI.SetCameraTexture(webCamTexture);
@@ -157,24 +147,18 @@ public class CameraBodyTracker : MonoBehaviour
         {
             DebugLog("Initializing MediaPipe Pose solution...");
             
-            // Initialize MediaPipe pose tracking
-            poseTracking = new PoseTracking();
+            var options = new PoseLandmarkerOptions(
+                baseOptions: new Tasks.Core.BaseOptions(Tasks.Core.BaseOptions.Delegate.CPU, modelAssetPath: "pose_landmarker_full.bytes"),
+                runningMode: Tasks.Vision.Core.RunningMode.LIVE_STREAM,
+                numPoses: 1,
+                minPoseDetectionConfidence: confidenceThreshold,
+                minPosePresenceConfidence: 0.5f,
+                minTrackingConfidence: 0.5f,
+                outputSegmentationMasks: false,
+                resultCallback: OnPoseLandmarkDetectionOutput
+            );
             
-            // Configure pose tracking settings
-            var config = new PoseTrackingConfig
-            {
-                model_complexity = 1, // 0=lite, 1=full, 2=heavy
-                smooth_landmarks = true,
-                enable_segmentation = false,
-                smooth_segmentation = false,
-                min_detection_confidence = confidenceThreshold,
-                min_tracking_confidence = 0.5f,
-                static_image_mode = false
-            };
-            
-            poseTracking.Initialize(config);
-            
-            // Wait for initialization
+            poseLandmarker = PoseLandmarker.CreateFromOptions(options);
             yield return new WaitForSeconds(0.5f);
             
             isInitialized = true;
@@ -199,12 +183,9 @@ public class CameraBodyTracker : MonoBehaviour
                 yield break;
             }
             
-            // Clamp camera index
             cameraIndex = Mathf.Clamp(cameraIndex, 0, WebCamTexture.devices.Length - 1);
-            
             DebugLog($"Starting camera: {availableCameras[cameraIndex]}");
             
-            // Create webcam texture
             webCamTexture = new WebCamTexture(
                 availableCameras[cameraIndex], 
                 targetWidth, 
@@ -212,10 +193,8 @@ public class CameraBodyTracker : MonoBehaviour
                 targetFPS
             );
             
-            // Start camera
             webCamTexture.Play();
             
-            // Wait for camera to start
             int attempts = 0;
             while (!webCamTexture.isPlaying && attempts < 50)
             {
@@ -230,7 +209,6 @@ public class CameraBodyTracker : MonoBehaviour
                 yield break;
             }
             
-            // Create input texture for MediaPipe
             inputTexture = new Texture2D(webCamTexture.width, webCamTexture.height, TextureFormat.RGB24, false);
             
             isCameraActive = true;
@@ -251,13 +229,11 @@ public class CameraBodyTracker : MonoBehaviour
         if (!isInitialized || !isCameraActive || webCamTexture == null || !webCamTexture.isPlaying)
             return;
         
-        // Process frame if not already processing
         if (!isProcessing)
         {
             StartCoroutine(ProcessFrame());
         }
         
-        // Update performance stats
         UpdatePerformanceStats();
     }
     
@@ -268,13 +244,9 @@ public class CameraBodyTracker : MonoBehaviour
         
         try
         {
-            // Convert webcam texture to MediaPipe input
             yield return StartCoroutine(ConvertTextureForMediaPipe());
-            
-            // Process pose detection
             yield return StartCoroutine(ProcessPoseDetection());
             
-            // Analyze hand positions for paddle detection
             if (hasPoseDetection)
             {
                 AnalyzeHandPositions();
@@ -286,23 +258,17 @@ public class CameraBodyTracker : MonoBehaviour
         }
         finally
         {
-            // Calculate processing time
             float processingTime = Time.realtimeSinceStartup - startTime;
             UpdateFrameTimeStats(processingTime);
-            
             isProcessing = false;
         }
     }
     
     private IEnumerator ConvertTextureForMediaPipe()
     {
-        // Get pixels from webcam texture
         Color32[] pixels = webCamTexture.GetPixels32();
-        
-        // Convert to RGB24 format for MediaPipe
         inputTexture.SetPixels32(pixels);
         inputTexture.Apply();
-        
         yield return null;
     }
     
@@ -310,26 +276,11 @@ public class CameraBodyTracker : MonoBehaviour
     {
         try
         {
-            // Send frame to MediaPipe
-            var result = poseTracking.ProcessImage(inputTexture);
+            var mpImage = new Mediapipe.Image(ImageFormat.Srgb, inputTexture.width, inputTexture.height, 
+                                            inputTexture.width * 3, inputTexture.GetRawTextureData());
             
-            // Wait for result
-            yield return new WaitUntil(() => result != null);
-            
-            if (result.pose_landmarks != null && result.pose_landmarks.landmark.Count > 0)
-            {
-                // Update pose data
-                UpdatePoseData(result.pose_landmarks);
-                hasPoseDetection = true;
-                
-                // Trigger event
-                OnPoseDetected?.Invoke(currentPoseData);
-            }
-            else
-            {
-                hasPoseDetection = false;
-                currentPoseData.isValid = false;
-            }
+            poseLandmarker.DetectAsync(mpImage, GetCurrentTimestampMillisec());
+            yield return null;
         }
         catch (System.Exception e)
         {
@@ -338,52 +289,65 @@ public class CameraBodyTracker : MonoBehaviour
         }
     }
     
-    private void UpdatePoseData(NormalizedLandmarkList landmarks)
+    private void OnPoseLandmarkDetectionOutput(PoseLandmarkerResult result, Mediapipe.Image image, long timestamp)
     {
-        currentPoseData.isValid = true;
-        currentPoseData.timestamp = Time.time;
-        currentPoseData.confidence = CalculateOverallConfidence(landmarks);
-        
-        // Extract key landmarks (MediaPipe pose landmark indices)
-        // 15 = left wrist, 16 = right wrist
-        // 11 = left shoulder, 12 = right shoulder
-        
-        if (landmarks.landmark.Count > 16)
+        if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
         {
-            // Left hand (wrist)
-            var leftWrist = landmarks.landmark[15];
-            currentPoseData.leftHand = new Vector2(leftWrist.x, 1f - leftWrist.y); // Flip Y
-            currentPoseData.leftHandConfidence = leftWrist.visibility;
-            
-            // Right hand (wrist)
-            var rightWrist = landmarks.landmark[16];
-            currentPoseData.rightHand = new Vector2(rightWrist.x, 1f - rightWrist.y); // Flip Y
-            currentPoseData.rightHandConfidence = rightWrist.visibility;
-            
-            // Shoulders
-            var leftShoulder = landmarks.landmark[11];
-            var rightShoulder = landmarks.landmark[12];
-            currentPoseData.leftShoulder = new Vector2(leftShoulder.x, 1f - leftShoulder.y);
-            currentPoseData.rightShoulder = new Vector2(rightShoulder.x, 1f - rightShoulder.y);
-            currentPoseData.leftShoulderConfidence = leftShoulder.visibility;
-            currentPoseData.rightShoulderConfidence = rightShoulder.visibility;
-            
-            // Update hand visibility flags
-            currentPoseData.leftHandVisible = leftWrist.visibility > confidenceThreshold;
-            currentPoseData.rightHandVisible = rightWrist.visibility > confidenceThreshold;
+            UpdatePoseData(result.poseLandmarks[0]);
+            hasPoseDetection = true;
+            OnPoseDetected?.Invoke(currentPoseData);
+        }
+        else
+        {
+            hasPoseDetection = false;
+            currentPoseData.isValid = false;
         }
     }
     
-    private float CalculateOverallConfidence(NormalizedLandmarkList landmarks)
+    private void UpdatePoseData(IList<NormalizedLandmark> landmarks)
+    {
+        currentPoseData.isValid = true;
+        currentPoseData.timestamp = Time.time;
+        
+        if (landmarks.Count > 16)
+        {
+            // Left hand (wrist - index 15)
+            var leftWrist = landmarks[15];
+            currentPoseData.leftHand = new Vector2(leftWrist.x, 1f - leftWrist.y);
+            currentPoseData.leftHandConfidence = leftWrist.visibility ?? 0f;
+            
+            // Right hand (wrist - index 16)
+            var rightWrist = landmarks[16];
+            currentPoseData.rightHand = new Vector2(rightWrist.x, 1f - rightWrist.y);
+            currentPoseData.rightHandConfidence = rightWrist.visibility ?? 0f;
+            
+            // Shoulders (left - index 11, right - index 12)
+            var leftShoulder = landmarks[11];
+            var rightShoulder = landmarks[12];
+            currentPoseData.leftShoulder = new Vector2(leftShoulder.x, 1f - leftShoulder.y);
+            currentPoseData.rightShoulder = new Vector2(rightShoulder.x, 1f - rightShoulder.y);
+            currentPoseData.leftShoulderConfidence = leftShoulder.visibility ?? 0f;
+            currentPoseData.rightShoulderConfidence = rightShoulder.visibility ?? 0f;
+            
+            // Update visibility flags
+            currentPoseData.leftHandVisible = currentPoseData.leftHandConfidence > confidenceThreshold;
+            currentPoseData.rightHandVisible = currentPoseData.rightHandConfidence > confidenceThreshold;
+            
+            // Calculate overall confidence
+            currentPoseData.confidence = CalculateOverallConfidence(landmarks);
+        }
+    }
+    
+    private float CalculateOverallConfidence(IList<NormalizedLandmark> landmarks)
     {
         float totalConfidence = 0f;
         int validLandmarks = 0;
         
-        foreach (var landmark in landmarks.landmark)
+        foreach (var landmark in landmarks)
         {
-            if (landmark.visibility > 0)
+            if (landmark.visibility.HasValue && landmark.visibility.Value > 0)
             {
-                totalConfidence += landmark.visibility;
+                totalConfidence += landmark.visibility.Value;
                 validLandmarks++;
             }
         }
@@ -396,8 +360,6 @@ public class CameraBodyTracker : MonoBehaviour
         if (!currentPoseData.isValid) return;
         
         bool useShoulderFallback = false;
-        
-        // Check if hands are visible and confident
         bool leftHandValid = currentPoseData.leftHandVisible && currentPoseData.leftHandConfidence > confidenceThreshold;
         bool rightHandValid = currentPoseData.rightHandVisible && currentPoseData.rightHandConfidence > confidenceThreshold;
         
@@ -405,7 +367,6 @@ public class CameraBodyTracker : MonoBehaviour
         
         if (leftHandValid && rightHandValid)
         {
-            // Use hand positions
             leftPos = currentPoseData.leftHand;
             rightPos = currentPoseData.rightHand;
         }
@@ -413,27 +374,21 @@ public class CameraBodyTracker : MonoBehaviour
                  currentPoseData.leftShoulderConfidence > confidenceThreshold && 
                  currentPoseData.rightShoulderConfidence > confidenceThreshold)
         {
-            // Fall back to shoulder positions
             leftPos = currentPoseData.leftShoulder;
             rightPos = currentPoseData.rightShoulder;
             useShoulderFallback = true;
-            DebugLog("Using shoulder fallback for paddle detection");
         }
         else
         {
-            // Not enough data for detection
             return;
         }
         
-        // Calculate Y position difference
         float yDifference = leftPos.y - rightPos.y;
         float threshold = useShoulderFallback ? shoulderThreshold : paddleThreshold;
         
-        // Detect paddle motions
-        bool leftShouldPaddle = yDifference < -threshold; // Left hand/shoulder lower
-        bool rightShouldPaddle = yDifference > threshold;  // Right hand/shoulder lower
+        bool leftShouldPaddle = yDifference < -threshold;
+        bool rightShouldPaddle = yDifference > threshold;
         
-        // Trigger paddle actions with debounce
         if (leftShouldPaddle && canPaddleLeft && Time.time - lastLeftPaddleTime > debounceTime)
         {
             TriggerLeftPaddle();
@@ -444,16 +399,8 @@ public class CameraBodyTracker : MonoBehaviour
             TriggerRightPaddle();
         }
         
-        // Update state for visual feedback
         isLeftHandLower = leftShouldPaddle;
         isRightHandLower = rightShouldPaddle;
-        
-        // Debug logging
-        if (enableDebugLogs && Time.time - lastFrameTime > 0.5f) // Log every 0.5s
-        {
-            DebugLog($"Pose Analysis - Y Diff: {yDifference:F3}, L:{leftPos.y:F3}, R:{rightPos.y:F3}, " +
-                    $"Threshold: {threshold:F3}, Fallback: {useShoulderFallback}");
-        }
     }
     
     private void TriggerLeftPaddle()
@@ -500,7 +447,7 @@ public class CameraBodyTracker : MonoBehaviour
     {
         frameCount++;
         
-        if (Time.time - lastFrameTime > 1f) // Update every second
+        if (Time.time - lastFrameTime > 1f)
         {
             float fps = frameCount / (Time.time - lastFrameTime);
             
@@ -518,19 +465,22 @@ public class CameraBodyTracker : MonoBehaviour
     {
         frameTimes.Enqueue(processingTime);
         
-        // Keep only last 30 frame times
         while (frameTimes.Count > 30)
         {
             frameTimes.Dequeue();
         }
         
-        // Calculate average
         float total = 0f;
         foreach (float time in frameTimes)
         {
             total += time;
         }
         avgProcessingTime = total / frameTimes.Count;
+    }
+    
+    private long GetCurrentTimestampMillisec()
+    {
+        return (long)(Time.realtimeSinceStartup * 1000);
     }
     
     // Public control methods
@@ -585,13 +535,11 @@ public class CameraBodyTracker : MonoBehaviour
     public void SetDetectionThreshold(float threshold)
     {
         paddleThreshold = Mathf.Clamp(threshold, 0.01f, 0.2f);
-        DebugLog($"Detection threshold set to: {paddleThreshold:F3}");
     }
     
     public void SetDebounceTime(float time)
     {
         debounceTime = Mathf.Clamp(time, 0.1f, 2f);
-        DebugLog($"Debounce time set to: {debounceTime:F1}s");
     }
     
     // Getters
@@ -618,9 +566,9 @@ public class CameraBodyTracker : MonoBehaviour
     {
         StopTracking();
         
-        if (poseTracking != null)
+        if (poseLandmarker != null)
         {
-            poseTracking.Dispose();
+            poseLandmarker.Dispose();
         }
         
         if (inputTexture != null)
@@ -661,9 +609,9 @@ public class CameraBodyTracker : MonoBehaviour
             
             if (isLeftHandLower || isRightHandLower)
             {
-                GUI.color = Color.yellow;
+                GUI.color = UnityEngine.Color.yellow;
                 GUILayout.Label($"Paddle: {(isLeftHandLower ? "LEFT" : "RIGHT")}");
-                GUI.color = Color.white;
+                GUI.color = UnityEngine.Color.white;
             }
         }
         

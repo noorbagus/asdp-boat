@@ -1,13 +1,16 @@
 using UnityEngine;
 using System;
 using System.Collections;
-using Mediapipe;
+using System.Collections.Generic;
 using Mediapipe.Unity;
+using Mediapipe.Tasks.Vision.PoseLandmarker;
+using Mediapipe.Tasks.Components.Containers;
+using Mediapipe.Tasks.Core;
 
 public class MediaPipeManager : MonoBehaviour
 {
     [Header("MediaPipe Configuration")]
-    [SerializeField] private RunningMode runningMode = RunningMode.Async;
+    [SerializeField] private Mediapipe.Tasks.Vision.Core.RunningMode runningMode = Mediapipe.Tasks.Vision.Core.RunningMode.LIVE_STREAM;
     [SerializeField] private int modelComplexity = 1; // 0=lite, 1=full, 2=heavy
     [SerializeField] private bool smoothLandmarks = true;
     [SerializeField] private bool enableSegmentation = false;
@@ -26,8 +29,8 @@ public class MediaPipeManager : MonoBehaviour
     [SerializeField] private bool autoRestart = true;
     
     // MediaPipe components
-    private PoseSolution poseSolution;
-    private GpuResources gpuResources;
+    private PoseLandmarker poseLandmarker;
+    private BaseOptions.Delegate delegateType;
     private bool isInitialized = false;
     private bool isProcessing = false;
     private int currentRetries = 0;
@@ -44,7 +47,7 @@ public class MediaPipeManager : MonoBehaviour
     // Events
     public event Action OnInitialized;
     public event Action<string> OnError;
-    public event Action<PoseLandmarks> OnPoseDetected;
+    public event Action<IList<NormalizedLandmark>> OnPoseDetected;
     public event Action OnProcessingStarted;
     public event Action OnProcessingCompleted;
     
@@ -53,19 +56,20 @@ public class MediaPipeManager : MonoBehaviour
     {
         public Texture2D inputTexture;
         public float timestamp;
-        public Action<PoseLandmarks> callback;
-    }
-    
-    public enum RunningMode
-    {
-        Sync,
-        Async,
-        Threaded
+        public Action<IList<NormalizedLandmark>> callback;
     }
     
     private void Awake()
     {
         processingInterval = 1f / maxProcessingFPS;
+        
+        // Set delegate type based on platform
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN || UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
+        delegateType = BaseOptions.Delegate.CPU;
+#else
+        delegateType = enableGPUAcceleration ? BaseOptions.Delegate.GPU : BaseOptions.Delegate.CPU;
+#endif
+        
         InitializeMediaPipe();
     }
     
@@ -80,20 +84,8 @@ public class MediaPipeManager : MonoBehaviour
         {
             Debug.Log("[MediaPipeManager] Initializing MediaPipe...");
             
-            // Initialize GPU resources if enabled
-            if (enableGPUAcceleration)
-            {
-                yield return StartCoroutine(InitializeGPUResources());
-            }
-            
-            // Create pose solution
-            yield return StartCoroutine(CreatePoseSolution());
-            
-            // Configure solution
-            ConfigurePoseSolution();
-            
-            // Start the solution
-            yield return StartCoroutine(StartPoseSolution());
+            // Create pose landmarker options
+            yield return StartCoroutine(CreatePoseLandmarker());
             
             isInitialized = true;
             currentRetries = 0;
@@ -107,100 +99,48 @@ public class MediaPipeManager : MonoBehaviour
         }
     }
     
-    private IEnumerator InitializeGPUResources()
+    private IEnumerator CreatePoseLandmarker()
     {
         try
         {
-            gpuResources = GpuResources.Create().Value();
-            Debug.Log("[MediaPipeManager] GPU resources initialized");
+            // Get model path based on complexity
+            string modelPath = GetModelPath();
+            
+            var options = new PoseLandmarkerOptions(
+                baseOptions: new Tasks.Core.BaseOptions(delegateType, modelAssetPath: modelPath),
+                runningMode: runningMode,
+                numPoses: 1,
+                minPoseDetectionConfidence: minDetectionConfidence,
+                minPosePresenceConfidence: minTrackingConfidence,
+                minTrackingConfidence: minTrackingConfidence,
+                outputSegmentationMasks: enableSegmentation,
+                resultCallback: runningMode == Tasks.Vision.Core.RunningMode.LIVE_STREAM ? OnPoseDetectionResult : null
+            );
+            
+            poseLandmarker = PoseLandmarker.CreateFromOptions(options);
+            
+            Debug.Log("[MediaPipeManager] Pose landmarker created");
         }
         catch (Exception e)
         {
-            Debug.LogWarning($"[MediaPipeManager] GPU initialization failed: {e.Message}, falling back to CPU");
-            enableGPUAcceleration = false;
+            throw new Exception($"Failed to create pose landmarker: {e.Message}");
         }
         
         yield return null;
     }
     
-    private IEnumerator CreatePoseSolution()
+    private string GetModelPath()
     {
-        try
+        switch (modelComplexity)
         {
-            var config = new PoseConfig
-            {
-                running_mode = ConvertRunningMode(runningMode),
-                num_poses = 1,
-                min_pose_detection_confidence = minDetectionConfidence,
-                min_pose_presence_confidence = minTrackingConfidence,
-                min_tracking_confidence = minTrackingConfidence,
-                output_segmentation_masks = enableSegmentation
-            };
-            
-            poseSolution = new PoseSolution(config);
-            
-            // Set up callbacks
-            poseSolution.OnPoseDetectionOutput += OnPoseDetectionResult;
-            poseSolution.OnError += OnMediaPipeError;
-            
-            Debug.Log("[MediaPipeManager] Pose solution created");
-        }
-        catch (Exception e)
-        {
-            throw new Exception($"Failed to create pose solution: {e.Message}");
-        }
-        
-        yield return null;
-    }
-    
-    private void ConfigurePoseSolution()
-    {
-        if (poseSolution == null) return;
-        
-        // Configure processing options
-        var processingOptions = new ProcessingOptions
-        {
-            model_complexity = modelComplexity,
-            smooth_landmarks = smoothLandmarks,
-            enable_segmentation = enableSegmentation,
-            smooth_segmentation = true,
-            use_previous_landmarks = true
-        };
-        
-        poseSolution.SetProcessingOptions(processingOptions);
-        
-        // Configure threading if supported
-        if (runningMode == RunningMode.Threaded)
-        {
-            poseSolution.SetNumThreads(numThreads);
-        }
-        
-        Debug.Log($"[MediaPipeManager] Pose solution configured - Complexity: {modelComplexity}, Smooth: {smoothLandmarks}");
-    }
-    
-    private IEnumerator StartPoseSolution()
-    {
-        try
-        {
-            poseSolution.Start();
-            Debug.Log("[MediaPipeManager] Pose solution started");
-        }
-        catch (Exception e)
-        {
-            throw new Exception($"Failed to start pose solution: {e.Message}");
-        }
-        
-        yield return new WaitForSeconds(0.1f); // Allow startup time
-    }
-    
-    private RunningMode ConvertRunningMode(RunningMode mode)
-    {
-        switch (mode)
-        {
-            case RunningMode.Sync: return RunningMode.Sync;
-            case RunningMode.Async: return RunningMode.Async;
-            case RunningMode.Threaded: return RunningMode.Async; // Use async for threaded
-            default: return RunningMode.Async;
+            case 0:
+                return "pose_landmarker_lite.bytes";
+            case 1:
+                return "pose_landmarker_full.bytes";
+            case 2:
+                return "pose_landmarker_heavy.bytes";
+            default:
+                return "pose_landmarker_full.bytes";
         }
     }
     
@@ -232,9 +172,9 @@ public class MediaPipeManager : MonoBehaviour
     }
     
     // Public processing methods
-    public void ProcessImageAsync(Texture2D inputTexture, Action<PoseLandmarks> callback = null)
+    public void ProcessImageAsync(Texture2D inputTexture, Action<IList<NormalizedLandmark>> callback = null)
     {
-        if (!isInitialized || poseSolution == null)
+        if (!isInitialized || poseLandmarker == null)
         {
             Debug.LogWarning("[MediaPipeManager] Cannot process image - MediaPipe not initialized");
             return;
@@ -253,7 +193,7 @@ public class MediaPipeManager : MonoBehaviour
             callback = callback
         };
         
-        if (runningMode == RunningMode.Async || runningMode == RunningMode.Threaded)
+        if (runningMode == Tasks.Vision.Core.RunningMode.LIVE_STREAM)
         {
             QueueProcessingRequest(request);
         }
@@ -302,50 +242,58 @@ public class MediaPipeManager : MonoBehaviour
         try
         {
             // Convert texture to MediaPipe image format
-            var imageFrame = CreateImageFrame(request.inputTexture);
+            var image = CreateImageFromTexture(request.inputTexture);
             
             // Process with MediaPipe
-            var result = poseSolution.Process(imageFrame);
+            long timestampMs = (long)(request.timestamp * 1000);
             
-            // Wait for async result if needed
-            if (runningMode == RunningMode.Async)
+            if (runningMode == Tasks.Vision.Core.RunningMode.LIVE_STREAM)
             {
-                yield return new WaitUntil(() => result.HasValue);
+                poseLandmarker.DetectAsync(image, timestampMs);
+            }
+            else if (runningMode == Tasks.Vision.Core.RunningMode.VIDEO)
+            {
+                var result = poseLandmarker.DetectForVideo(image, timestampMs);
+                if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
+                {
+                    OnPoseDetected?.Invoke(result.poseLandmarks[0]);
+                    request.callback?.Invoke(result.poseLandmarks[0]);
+                }
+            }
+            else
+            {
+                var result = poseLandmarker.Detect(image);
+                if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
+                {
+                    OnPoseDetected?.Invoke(result.poseLandmarks[0]);
+                    request.callback?.Invoke(result.poseLandmarks[0]);
+                }
             }
             
             lastProcessTime = Time.time;
-            
-            // Handle result
-            if (result.HasValue && result.Value.pose_landmarks != null)
-            {
-                var landmarks = result.Value.pose_landmarks;
-                
-                // Trigger callbacks
-                OnPoseDetected?.Invoke(landmarks);
-                request.callback?.Invoke(landmarks);
-            }
         }
         catch (Exception e)
         {
             Debug.LogError($"[MediaPipeManager] Processing error: {e.Message}");
             OnError?.Invoke($"Processing error: {e.Message}");
         }
+        
+        yield return null;
     }
     
     private void ProcessImageSync(ProcessingRequest request)
     {
         try
         {
-            var imageFrame = CreateImageFrame(request.inputTexture);
-            var result = poseSolution.Process(imageFrame);
+            var image = CreateImageFromTexture(request.inputTexture);
+            var result = poseLandmarker.Detect(image);
             
             lastProcessTime = Time.time;
             
-            if (result.HasValue && result.Value.pose_landmarks != null)
+            if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
             {
-                var landmarks = result.Value.pose_landmarks;
-                OnPoseDetected?.Invoke(landmarks);
-                request.callback?.Invoke(landmarks);
+                OnPoseDetected?.Invoke(result.poseLandmarks[0]);
+                request.callback?.Invoke(result.poseLandmarks[0]);
             }
         }
         catch (Exception e)
@@ -355,60 +303,23 @@ public class MediaPipeManager : MonoBehaviour
         }
     }
     
-    private ImageFrame CreateImageFrame(Texture2D texture)
+    private Mediapipe.Image CreateImageFromTexture(Texture2D texture)
     {
-        // Convert Unity texture to MediaPipe ImageFrame
-        var pixels = texture.GetPixels32();
-        var width = texture.width;
-        var height = texture.height;
+        // Convert Unity texture to MediaPipe Image
+        var pixels = texture.GetRawTextureData();
         
-        // Create RGB byte array
-        byte[] rgbData = new byte[width * height * 3];
-        int rgbIndex = 0;
-        
-        // Convert from Unity's bottom-left origin to top-left origin
-        for (int y = height - 1; y >= 0; y--)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                var pixel = pixels[y * width + x];
-                rgbData[rgbIndex++] = pixel.r;
-                rgbData[rgbIndex++] = pixel.g;
-                rgbData[rgbIndex++] = pixel.b;
-            }
-        }
-        
-        return new ImageFrame(ImageFormat.Srgb, width, height, width * 3, rgbData);
+        // MediaPipe expects SRGB format with width*3 stride
+        return new Mediapipe.Image(ImageFormat.Srgb, texture.width, texture.height, 
+                        texture.width * 3, pixels);
     }
     
     // Event handlers
-    private void OnPoseDetectionResult(PoseDetectionResult result)
+    private void OnPoseDetectionResult(PoseLandmarkerResult result, Mediapipe.Image image, long timestamp)
     {
-        if (result.pose_landmarks != null)
+        if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
         {
-            OnPoseDetected?.Invoke(result.pose_landmarks);
+            OnPoseDetected?.Invoke(result.poseLandmarks[0]);
         }
-    }
-    
-    private void OnMediaPipeError(Status status)
-    {
-        string errorMessage = $"MediaPipe error: {status.ToString()}";
-        Debug.LogError($"[MediaPipeManager] {errorMessage}");
-        OnError?.Invoke(errorMessage);
-        
-        if (autoRestart && status.Code == StatusCode.Internal)
-        {
-            StartCoroutine(RestartMediaPipe());
-        }
-    }
-    
-    private IEnumerator RestartMediaPipe()
-    {
-        Debug.Log("[MediaPipeManager] Attempting to restart MediaPipe...");
-        
-        CleanupResources();
-        yield return new WaitForSeconds(retryDelay);
-        InitializeMediaPipe();
     }
     
     // Configuration methods
@@ -418,7 +329,7 @@ public class MediaPipeManager : MonoBehaviour
         
         if (isInitialized)
         {
-            ConfigurePoseSolution();
+            StartCoroutine(RestartWithNewSettings());
         }
     }
     
@@ -428,7 +339,7 @@ public class MediaPipeManager : MonoBehaviour
         
         if (isInitialized)
         {
-            ConfigurePoseSolution();
+            StartCoroutine(RestartWithNewSettings());
         }
     }
     
@@ -438,7 +349,7 @@ public class MediaPipeManager : MonoBehaviour
         
         if (isInitialized)
         {
-            ConfigurePoseSolution();
+            StartCoroutine(RestartWithNewSettings());
         }
     }
     
@@ -448,14 +359,11 @@ public class MediaPipeManager : MonoBehaviour
         processingInterval = 1f / maxProcessingFPS;
     }
     
-    public void SetSmoothLandmarks(bool smooth)
+    private IEnumerator RestartWithNewSettings()
     {
-        smoothLandmarks = smooth;
-        
-        if (isInitialized)
-        {
-            ConfigurePoseSolution();
-        }
+        CleanupResources();
+        yield return new WaitForSeconds(0.1f);
+        InitializeMediaPipe();
     }
     
     // Status getters
@@ -466,7 +374,6 @@ public class MediaPipeManager : MonoBehaviour
     public int GetModelComplexity() => modelComplexity;
     public float GetDetectionConfidence() => minDetectionConfidence;
     public float GetTrackingConfidence() => minTrackingConfidence;
-    public bool IsGPUAccelerated() => enableGPUAcceleration && gpuResources != null;
     
     // Resource management
     private void CleanupResources()
@@ -478,17 +385,10 @@ public class MediaPipeManager : MonoBehaviour
             
             processingQueue.Clear();
             
-            if (poseSolution != null)
+            if (poseLandmarker != null)
             {
-                poseSolution.Stop();
-                poseSolution.Close();
-                poseSolution = null;
-            }
-            
-            if (gpuResources != null)
-            {
-                gpuResources.Dispose();
-                gpuResources = null;
+                poseLandmarker.Dispose();
+                poseLandmarker = null;
             }
             
             Debug.Log("[MediaPipeManager] Resources cleaned up");
@@ -512,11 +412,6 @@ public class MediaPipeManager : MonoBehaviour
             isProcessing = false;
             processingQueue.Clear();
         }
-        else if (isInitialized)
-        {
-            // Resume processing
-            // MediaPipe should automatically resume
-        }
     }
     
     private void OnApplicationFocus(bool hasFocus)
@@ -536,7 +431,6 @@ public class MediaPipeManager : MonoBehaviour
                $"Initialized: {isInitialized}\n" +
                $"Processing: {isProcessing}\n" +
                $"Queue Size: {processingQueue.Count}/{MAX_QUEUE_SIZE}\n" +
-               $"GPU Accelerated: {IsGPUAccelerated()}\n" +
                $"Model Complexity: {modelComplexity}\n" +
                $"Detection Confidence: {minDetectionConfidence:F2}\n" +
                $"Tracking Confidence: {minTrackingConfidence:F2}\n" +
@@ -555,12 +449,11 @@ public class MediaPipeManager : MonoBehaviour
         GUILayout.Label($"Initialized: {isInitialized}");
         GUILayout.Label($"Processing: {isProcessing}");
         GUILayout.Label($"Queue: {processingQueue.Count}/{MAX_QUEUE_SIZE}");
-        GUILayout.Label($"GPU: {IsGPUAccelerated()}");
         GUILayout.Label($"FPS Limit: {maxProcessingFPS}");
         
         if (GUILayout.Button("Restart MediaPipe"))
         {
-            StartCoroutine(RestartMediaPipe());
+            StartCoroutine(RestartWithNewSettings());
         }
         
         GUILayout.EndArea();
