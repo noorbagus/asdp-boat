@@ -40,20 +40,27 @@ public class PaddleIKController : MonoBehaviour
     public int minConsecutivePaddles = 2;
     public float speedThreshold = 0.3f;
     
-    [Header("ESP32 Integration - UPDATED")]
+    [Header("ESP32 Gyro Integration")]
     public bool useRawAngle = false;
     public float rawAngle = 0f;
     public float rawAngleMultiplier = 1.0f;
     [Range(0f, 1f)]
-    public float rawAngleSmoothing = 0.8f; // NEW: Smoothing for ESP32 input
-    public bool overrideWithRawAngle = true; // NEW: ESP32 override pattern animations
+    public float rawAngleSmoothing = 0.8f;
+    public bool overrideWithRawAngle = true;
+    
+    [Header("Idle Gyro Sync")]
+    public bool syncIdleWithGyro = true;
+    public float idleGyroSensitivity = 1.0f;
+    public float idleThreshold = 0.1f;
+    public float gyroIdleSmoothing = 5f;
+    public Vector3 gyroAxisMapping = new Vector3(0, 0, 1);
     
     [Header("Debug")]
     public bool enableDebugLogs = true;
     public bool showGizmos = true;
     
     // Pattern states
-    public enum PaddlePattern { None, Alternating, ConsecutiveLeft, ConsecutiveRight }
+    public enum PaddlePattern { None, Alternating, ConsecutiveLeft, ConsecutiveRight, GyroIdle }
     private PaddlePattern currentPattern = PaddlePattern.None;
     private PaddlePattern previousPattern = PaddlePattern.None;
     private PaddlePattern targetPattern = PaddlePattern.None;
@@ -67,31 +74,29 @@ public class PaddleIKController : MonoBehaviour
     private float swingTimer;
     private float lastPatternChangeTime;
     
-    // NEW: ESP32 smoothing
+    // ESP32 & Gyro smoothing
     private float smoothedRawAngle = 0f;
+    private float smoothedGyroIdle = 0f;
     private bool isESP32Controlled = false;
+    private ESP32GyroController esp32Controller;
     
     void Start()
     {
         InitializePaddle();
+        esp32Controller = FindObjectOfType<ESP32GyroController>();
     }
     
     void Update()
     {
         UpdatePaddleTransform();
-        
-        // Check if controlled by ESP32
         CheckESP32Control();
         
         if (useRawAngle && isESP32Controlled)
         {
-            // ESP32 mode: Use smoothed raw angle
-            UpdateRawAngleSmoothing();
-            targetRotationValue = initialRotation.z + smoothedRawAngle;
+            HandleESP32GyroInput();
         }
         else
         {
-            // Normal mode: Pattern-based animation
             DetectPaddlePattern();
             AnimatePaddle();
         }
@@ -99,13 +104,48 @@ public class PaddleIKController : MonoBehaviour
         ApplyRotation();
     }
     
+    private void HandleESP32GyroInput()
+    {
+        if (esp32Controller == null) return;
+        
+        bool isIdle = IsBoatIdle();
+        
+        if (isIdle && syncIdleWithGyro)
+        {
+            float targetGyroAngle = esp32Controller.GetSmoothedGyroValue() * idleGyroSensitivity;
+            smoothedGyroIdle = Mathf.Lerp(smoothedGyroIdle, targetGyroAngle, 
+                                         gyroIdleSmoothing * Time.deltaTime);
+            
+            targetRotationValue = initialRotation.z + smoothedGyroIdle;
+            
+            if (enableDebugLogs && currentPattern != PaddlePattern.GyroIdle)
+            {
+                Debug.Log("[PaddleController] Switched to Gyro Idle Mode");
+                currentPattern = PaddlePattern.GyroIdle;
+            }
+        }
+        else
+        {
+            UpdateRawAngleSmoothing();
+            targetRotationValue = initialRotation.z + smoothedRawAngle;
+        }
+    }
+    
+    private bool IsBoatIdle()
+    {
+        if (boatController == null) return true;
+        
+        float currentSpeed = boatController.GetCurrentSpeed();
+        bool isLeftPaddling = boatController.IsLeftPaddling();
+        bool isRightPaddling = boatController.IsRightPaddling();
+        
+        return currentSpeed < idleThreshold && !isLeftPaddling && !isRightPaddling;
+    }
+    
     private void CheckESP32Control()
     {
-        // Auto-detect if ESP32 is controlling
-        ESP32GyroController esp32 = FindObjectOfType<ESP32GyroController>();
-        isESP32Controlled = (esp32 != null && esp32.IsConnected());
+        isESP32Controlled = (esp32Controller != null && esp32Controller.IsConnected());
         
-        // Override pattern animations when ESP32 is active
         if (isESP32Controlled && overrideWithRawAngle)
         {
             useRawAngle = true;
@@ -114,7 +154,6 @@ public class PaddleIKController : MonoBehaviour
     
     private void UpdateRawAngleSmoothing()
     {
-        // Smooth the raw angle input for better visual result
         smoothedRawAngle = Mathf.Lerp(smoothedRawAngle, rawAngle * rawAngleMultiplier, 
                                      (1f - rawAngleSmoothing) * Time.deltaTime * 10f);
     }
@@ -169,19 +208,13 @@ public class PaddleIKController : MonoBehaviour
     private PaddlePattern DeterminePattern(int leftCount, int rightCount, float currentSpeed)
     {
         if (leftCount >= minConsecutivePaddles)
-        {
             return PaddlePattern.ConsecutiveLeft;
-        }
         
         if (rightCount >= minConsecutivePaddles)
-        {
             return PaddlePattern.ConsecutiveRight;
-        }
         
         if (currentSpeed > speedThreshold)
-        {
             return PaddlePattern.Alternating;
-        }
         
         return PaddlePattern.None;
     }
@@ -208,15 +241,12 @@ public class PaddleIKController : MonoBehaviour
             case PaddlePattern.Alternating:
                 patternRotation = CalculateAlternatingRotation();
                 break;
-                
             case PaddlePattern.ConsecutiveLeft:
                 patternRotation = CalculateLeftTurnRotation();
                 break;
-                
             case PaddlePattern.ConsecutiveRight:
                 patternRotation = CalculateRightTurnRotation();
                 break;
-                
             default:
                 patternRotation = initialRotation.z;
                 break;
@@ -287,6 +317,7 @@ public class PaddleIKController : MonoBehaviour
             case PaddlePattern.Alternating: return useBalancedSwing ? "Balanced Forward" : "Upward Forward";
             case PaddlePattern.ConsecutiveLeft: return "Turn Right";
             case PaddlePattern.ConsecutiveRight: return "Turn Left";
+            case PaddlePattern.GyroIdle: return "Gyro Idle";
             case PaddlePattern.None: return "Neutral";
             default: return "Unknown";
         }
@@ -300,7 +331,6 @@ public class PaddleIKController : MonoBehaviour
         }
     }
     
-    // Visual debugging
     private void OnDrawGizmos()
     {
         if (!showGizmos || character == null) return;
@@ -311,21 +341,14 @@ public class PaddleIKController : MonoBehaviour
         
         if (paddle != null && Application.isPlaying)
         {
-            // ESP32 vs Pattern mode indicator
             Gizmos.color = isESP32Controlled ? Color.magenta : GetPatternColor(currentPattern);
             Gizmos.DrawWireCube(paddle.position + Vector3.up * 0.5f, Vector3.one * 0.2f);
             
-            if (transitionProgress < 1f && !isESP32Controlled)
-            {
-                Gizmos.color = Color.Lerp(GetPatternColor(previousPattern), GetPatternColor(targetPattern), transitionProgress);
-                Gizmos.DrawWireSphere(paddle.position + Vector3.up * 0.5f, 0.15f);
-            }
-            
-            // Show ESP32 angle visualization
             if (useRawAngle && isESP32Controlled)
             {
-                Gizmos.color = Color.cyan;
-                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, smoothedRawAngle) * Vector3.forward;
+                Gizmos.color = currentPattern == PaddlePattern.GyroIdle ? Color.cyan : Color.green;
+                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, 
+                    currentPattern == PaddlePattern.GyroIdle ? smoothedGyroIdle : smoothedRawAngle) * Vector3.forward;
                 Gizmos.DrawRay(paddle.position, rawDir * 0.5f);
             }
         }
@@ -338,6 +361,7 @@ public class PaddleIKController : MonoBehaviour
             case PaddlePattern.Alternating: return useBalancedSwing ? Color.green : Color.cyan;
             case PaddlePattern.ConsecutiveLeft: return Color.red;
             case PaddlePattern.ConsecutiveRight: return Color.blue;
+            case PaddlePattern.GyroIdle: return Color.cyan;
             default: return Color.white;
         }
     }
@@ -347,6 +371,7 @@ public class PaddleIKController : MonoBehaviour
     public float GetTransitionProgress() => transitionProgress;
     public bool IsAnimating() => currentPattern != PaddlePattern.None;
     public bool IsESP32Controlled() => isESP32Controlled;
+    public bool IsInGyroIdleMode() => currentPattern == PaddlePattern.GyroIdle;
     
     public void SetBalancedSwing(bool enabled)
     {
@@ -354,17 +379,14 @@ public class PaddleIKController : MonoBehaviour
         DebugLog($"Balanced swing: {(enabled ? "enabled" : "disabled")}");
     }
     
-    // ESP32 integration - IMPROVED
     public void SetRawAngle(float angle)
     {
         useRawAngle = true;
         rawAngle = angle;
     }
     
-    // Force pattern (used by ESP32GyroController)
     public void ForcePattern(int patternIndex)
     {
-        // Only apply if not overridden by ESP32
         if (isESP32Controlled && overrideWithRawAngle) return;
         
         useRawAngle = false;
@@ -377,5 +399,11 @@ public class PaddleIKController : MonoBehaviour
             previousRotationValue = currentRotationValue;
             DebugLog($"Force pattern to: {GetPatternName(targetPattern)}");
         }
+    }
+    
+    public void SetGyroIdleSync(bool enabled)
+    {
+        syncIdleWithGyro = enabled;
+        DebugLog($"Gyro idle sync: {(enabled ? "enabled" : "disabled")}");
     }
 }
