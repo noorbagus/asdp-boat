@@ -725,6 +725,7 @@ GameObject:
   - component: {fileID: 2957375509718694954}
   - component: {fileID: 7125084560109502676}
   - component: {fileID: 7476520659164987281}
+  - component: {fileID: 8103861378432152663}
   m_Layer: 0
   m_Name: octopus
   m_TagString: Obstacle
@@ -818,7 +819,7 @@ MonoBehaviour:
   startPositionY: -1
   riseSpeedRange: {x: 0.5, y: 2}
   fallSpeedRange: {x: 0.5, y: 2}
-  floatHeightRange: {x: 1, y: 3}
+  floatHeightRange: {x: 2, y: 4}
   holdTimeTopRange: {x: 0.5, y: 2}
   holdTimeBottomRange: {x: 0.5, y: 2}
   animationType: 2
@@ -871,8 +872,30 @@ BoxCollider:
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 2
-  m_Size: {x: 1, y: 1, z: 1}
-  m_Center: {x: 0, y: 0, z: 0}
+  m_Size: {x: 1, y: 4, z: 1}
+  m_Center: {x: 0, y: -0.5, z: 0}
+--- !u!114 &8103861378432152663
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2723512889127472458}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8f7c5ce1a17114fb180f4e2d0a9f2392, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  targetTransform: {fileID: 0}
+  autoFindTarget: 1
+  billboardMode: 1
+  smoothRotation: 1
+  rotationSpeed: 5
+  frontDirection: {x: 0, y: 0, z: 1}
+  frontOffset: {x: 0, y: 0, z: 0}
+  updateMode: 0
+  maxDistance: 100
+  showDebugRays: 0
 --- !u!1 &2757863106050287465
 GameObject:
   m_ObjectHideFlags: 0

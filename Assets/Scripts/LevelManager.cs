@@ -199,8 +199,7 @@ public class LevelManager : MonoBehaviour
                     SetupObstacleMovement(obstacle);
                 }
                 
-                SetupObstacleLookAt(obstacle);
-                
+               
                 spawnedObstacles.Add(obstacle);
                 usedPositions.Add(spawnPos);
                 
@@ -385,13 +384,7 @@ public class LevelManager : MonoBehaviour
             obstacleBase.SetMoveDirection(randomDir);
         }
     }
-    
-    private void SetupObstacleLookAt(GameObject obstacle)
-    {
-        // Can be implemented if needed for specific behaviors
-        DebugLog($"Set up obstacle: {obstacle.name}");
-    }
-    
+      
     // Runtime adjustment methods
     public void UpdateWhaleScale(float newScale)
     {

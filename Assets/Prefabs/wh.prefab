@@ -93,11 +93,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 3635274457239335326}
-  - component: {fileID: 4123263673906850598}
   - component: {fileID: 4123263673906850597}
-  - component: {fileID: 4123263673906850599}
   - component: {fileID: 9220098113048989287}
-  - component: {fileID: 4123263673906850592}
   m_Layer: 0
   m_Name: whale-obstacle
   m_TagString: Obstacle
@@ -122,30 +119,6 @@ Transform:
   m_Father: {fileID: 1242557127388677551}
   m_RootOrder: 0
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &4123263673906850598
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4123263673906850596}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 077ea87b269f54ca7a74193c38c16114, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  startPositionY: -1
-  riseSpeedRange: {x: 0.5, y: 2}
-  fallSpeedRange: {x: 0.5, y: 2}
-  floatHeightRange: {x: 1, y: 3}
-  holdTimeTopRange: {x: 0.5, y: 2}
-  holdTimeBottomRange: {x: 0.5, y: 2}
-  animationType: 2
-  globalSpeedMultiplier: 3
-  startDelayRange: {x: 3, y: 5}
-  randomChangeInterval: 2
-  randomSmoothness: 2
-  showDebugInfo: 0
 --- !u!114 &4123263673906850597
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -171,40 +144,6 @@ MonoBehaviour:
   globalSpeedMultiplier: 1
   playAll: 1
   showDebugInfo: 1
---- !u!114 &4123263673906850599
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4123263673906850596}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1d8d14012ba33484ea3c05ecdcd986b5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  damageAmount: 10
-  collisionEffect: {fileID: 0}
-  collisionSound: {fileID: 0}
-  knockbackForce: 500
-  canMove: 0
-  moveSpeed: 1
-  moveDirection: {x: 0, y: 0, z: 0}
-  enableLookAtBoat: 0
-  lookAtSpeed: 2
-  onlyRotateY: 1
-  smoothLookAt: 1
-  lookAtRange: 50
-  moveX: 1
-  moveY: 0
-  moveZ: 1
-  maxDistanceFromOrigin: 50
-  enableBoundaryConstraint: 1
-  spawnAreaCenter: {x: 0, y: 0, z: 0}
-  spawnAreaSize: {x: 50, y: 1, z: 50}
-  enableDebugTracking: 0
-  enableDebugLogs: 1
-  hasCollided: 0
 --- !u!137 &9220098113048989287
 SkinnedMeshRenderer:
   m_ObjectHideFlags: 0
@@ -258,19 +197,6 @@ SkinnedMeshRenderer:
     m_Center: {x: 0, y: 0.004226079, z: -0.0024302825}
     m_Extent: {x: 0.009217629, y: 0.008544337, z: 0.018149167}
   m_DirtyAABB: 0
---- !u!65 &4123263673906850592
-BoxCollider:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4123263673906850596}
-  m_Material: {fileID: 0}
-  m_IsTrigger: 0
-  m_Enabled: 1
-  serializedVersion: 2
-  m_Size: {x: 0.02, y: 0.018, z: 0.036298335}
-  m_Center: {x: 0, y: 0.004226079, z: -0.0024302825}
 --- !u!1 &6510824872020448692
 GameObject:
   m_ObjectHideFlags: 0
@@ -280,9 +206,13 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1242557127388677551}
+  - component: {fileID: 6248303357718320084}
+  - component: {fileID: 8638481319903575086}
+  - component: {fileID: 7882396086046195381}
+  - component: {fileID: 267429292411480854}
   m_Layer: 0
   m_Name: wh
-  m_TagString: Untagged
+  m_TagString: Obstacle
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -303,6 +233,97 @@ Transform:
   m_Father: {fileID: 0}
   m_RootOrder: 0
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!65 &6248303357718320084
+BoxCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6510824872020448692}
+  m_Material: {fileID: 0}
+  m_IsTrigger: 0
+  m_Enabled: 1
+  serializedVersion: 2
+  m_Size: {x: 2, y: 9, z: 7}
+  m_Center: {x: 0, y: -1, z: 2}
+--- !u!54 &8638481319903575086
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6510824872020448692}
+  serializedVersion: 2
+  m_Mass: 7
+  m_Drag: 2
+  m_AngularDrag: 3
+  m_UseGravity: 1
+  m_IsKinematic: 0
+  m_Interpolate: 0
+  m_Constraints: 0
+  m_CollisionDetection: 0
+--- !u!114 &7882396086046195381
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6510824872020448692}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1d8d14012ba33484ea3c05ecdcd986b5, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  damageAmount: 20
+  collisionEffect: {fileID: 0}
+  collisionSound: {fileID: 0}
+  knockbackForce: 100
+  canMove: 0
+  moveSpeed: 1
+  moveDirection: {x: 0, y: 0, z: 0}
+  enableLookAtBoat: 0
+  lookAtSpeed: 2
+  onlyRotateY: 1
+  smoothLookAt: 1
+  lookAtRange: 50
+  moveX: 1
+  moveY: 0
+  moveZ: 1
+  maxDistanceFromOrigin: 50
+  enableBoundaryConstraint: 0
+  spawnAreaCenter: {x: 0, y: 0, z: 0}
+  spawnAreaSize: {x: 50, y: 1, z: 50}
+  enableDebugTracking: 1
+  enableDebugLogs: 1
+  hasCollided: 0
+  bounceForce: 8
+  boatBounceMultiplier: 1.2
+  whaleBounceMultiplier: 0.8
+  fadeOutTime: 1.5
+--- !u!114 &267429292411480854
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6510824872020448692}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 077ea87b269f54ca7a74193c38c16114, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  startPositionY: 1
+  riseSpeedRange: {x: 0.5, y: 2}
+  fallSpeedRange: {x: 0.5, y: 2}
+  floatHeightRange: {x: 3, y: 5}
+  holdTimeTopRange: {x: 0.5, y: 2}
+  holdTimeBottomRange: {x: 0.5, y: 2}
+  animationType: 2
+  globalSpeedMultiplier: 2
+  startDelayRange: {x: 0, y: 3}
+  randomChangeInterval: 2
+  randomSmoothness: 2
+  showDebugInfo: 1
 --- !u!1 &7383679591489533766
 GameObject:
   m_ObjectHideFlags: 0
