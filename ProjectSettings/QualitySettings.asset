@@ -42,7 +42,8 @@ QualitySettings:
     asyncUploadPersistentBuffer: 1
     resolutionScalingFixedDPIFactor: 1
     customRenderPipeline: {fileID: 0}
-    excludedTargetPlatforms: []
+    excludedTargetPlatforms:
+    - Server
   - serializedVersion: 2
     name: Low
     pixelLightCount: 0
@@ -79,7 +80,8 @@ QualitySettings:
     asyncUploadPersistentBuffer: 1
     resolutionScalingFixedDPIFactor: 1
     customRenderPipeline: {fileID: 0}
-    excludedTargetPlatforms: []
+    excludedTargetPlatforms:
+    - Server
   - serializedVersion: 2
     name: Medium
     pixelLightCount: 1
@@ -155,9 +157,7 @@ QualitySettings:
     resolutionScalingFixedDPIFactor: 1
     customRenderPipeline: {fileID: 0}
     excludedTargetPlatforms:
-    - Windows Store Apps
     - Server
-    - Standalone
   - serializedVersion: 2
     name: Very High
     pixelLightCount: 3
@@ -195,9 +195,7 @@ QualitySettings:
     resolutionScalingFixedDPIFactor: 1
     customRenderPipeline: {fileID: 0}
     excludedTargetPlatforms:
-    - Standalone
     - Server
-    - Windows Store Apps
   - serializedVersion: 2
     name: Ultra
     pixelLightCount: 4

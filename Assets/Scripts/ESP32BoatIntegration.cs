@@ -18,7 +18,7 @@ public class ESP32BoatIntegration : MonoBehaviour
     [Tooltip("Map tilt left to right paddle and vice versa")]
     public bool invertPaddles = false;
 
-    [Header("Alternating Movement - NEW")]
+    [Header("Alternating Movement")]
     [Tooltip("Time window to detect alternating left-right pattern")]
     public float alternatingTimeWindow = 1.5f;
     [Tooltip("Minimum alternating tilts needed for forward movement")]
@@ -28,7 +28,7 @@ public class ESP32BoatIntegration : MonoBehaviour
     [Tooltip("Enable alternating pattern detection")]
     public bool enableAlternatingMovement = true;
 
-    [Header("Idle Behavior - NEW")]
+    [Header("Idle Behavior")]
     [Tooltip("Enable paddle to follow gyro when boat is idle")]
     public bool enableIdleFollow = true;
     [Tooltip("Time before entering idle state")]
@@ -48,12 +48,12 @@ public class ESP32BoatIntegration : MonoBehaviour
     private float steadyTimer = 0f;
     private bool wasOverThreshold = false;
 
-    // NEW: Alternating pattern detection
+    // Alternating pattern detection
     private List<TiltEvent> tiltHistory = new List<TiltEvent>();
     private float lastTiltTime = 0f;
     private bool isInAlternatingMode = false;
 
-    // NEW: Idle state management
+    // Idle state management
     private bool isIdle = true;
     private float lastMovementTime = 0f;
     private float idleAngle = 0f;
@@ -124,29 +124,18 @@ public class ESP32BoatIntegration : MonoBehaviour
             // Determine tilt direction
             bool isTiltingRight = currentAngle > 0;
             
+            // Get paddle logic from boat controller
+            PaddleLogic paddleLogic = boatController.paddleLogic;
+            
             // Only trigger paddle if we're not in cooldown
             if (isTiltingRight && leftCooldownTime <= 0)
             {
-                // FIXED: Correct invert paddles logic
-                if (invertPaddles)
-                    TriggerRightPaddle();
-                else
-                    TriggerLeftPaddle();
-                    
-                // Record tilt event for pattern detection
-                RecordTiltEvent(false); // Right tilt = left paddle
+                ProcessTilt(true, paddleLogic);
                 leftCooldownTime = paddleCooldown;
             }
             else if (!isTiltingRight && rightCooldownTime <= 0)
             {
-                // FIXED: Correct invert paddles logic  
-                if (invertPaddles)
-                    TriggerLeftPaddle();
-                else
-                    TriggerRightPaddle();
-                    
-                // Record tilt event for pattern detection
-                RecordTiltEvent(true); // Left tilt = right paddle
+                ProcessTilt(false, paddleLogic);
                 rightCooldownTime = paddleCooldown;
             }
         }
@@ -165,7 +154,42 @@ public class ESP32BoatIntegration : MonoBehaviour
         lastAngle = currentAngle;
     }
     
-    // NEW: Update idle state based on movement and angle
+    // NEW: Process tilt based on paddle logic
+    private void ProcessTilt(bool isRightTilt, PaddleLogic paddleLogic)
+    {
+        if (paddleLogic == PaddleLogic.Keyboard)
+        {
+            // Keyboard logic: Right tilt = Left paddle (for turning right)
+            if (isRightTilt)
+            {
+                if (invertPaddles) TriggerRightPaddle(); else TriggerLeftPaddle();
+                RecordTiltEvent(false); // Right tilt = left paddle
+            }
+            else
+            {
+                if (invertPaddles) TriggerLeftPaddle(); else TriggerRightPaddle();
+                RecordTiltEvent(true); // Left tilt = right paddle
+            }
+        }
+        else // Gyro logic
+        {
+            // Gyro logic: Right tilt = Right paddle (mirror)
+            if (isRightTilt)
+            {
+                if (invertPaddles) TriggerLeftPaddle(); else TriggerRightPaddle();
+                RecordTiltEvent(true); // Right tilt = right paddle
+            }
+            else
+            {
+                if (invertPaddles) TriggerRightPaddle(); else TriggerLeftPaddle();
+                RecordTiltEvent(false); // Left tilt = left paddle
+            }
+        }
+        
+        DebugLog($"Tilt: {(isRightTilt ? "RIGHT" : "LEFT")}, Logic: {paddleLogic}, Invert: {invertPaddles}");
+    }
+    
+    // Update idle state based on movement and angle
     private void UpdateIdleState(float currentAngle)
     {
         bool wasIdle = isIdle;
@@ -190,7 +214,7 @@ public class ESP32BoatIntegration : MonoBehaviour
         }
     }
     
-    // NEW: Handle paddle following gyro when idle
+    // Handle paddle following gyro when idle
     private void HandleIdlePaddleFollow(float currentAngle)
     {
         if (paddleController != null)
@@ -202,7 +226,7 @@ public class ESP32BoatIntegration : MonoBehaviour
         }
     }
     
-    // NEW: Record tilt events for pattern detection
+    // Record tilt events for pattern detection
     private void RecordTiltEvent(bool isLeftPaddle)
     {
         tiltHistory.Add(new TiltEvent(isLeftPaddle, Time.time));
@@ -217,7 +241,7 @@ public class ESP32BoatIntegration : MonoBehaviour
         DebugLog($"Tilt recorded: {(isLeftPaddle ? "LEFT" : "RIGHT")} - History count: {tiltHistory.Count}");
     }
     
-    // NEW: Analyze for alternating left-right pattern
+    // Analyze for alternating left-right pattern
     private void AnalyzeAlternatingPattern()
     {
         if (tiltHistory.Count < minAlternatingTilts)
@@ -247,7 +271,7 @@ public class ESP32BoatIntegration : MonoBehaviour
         }
     }
     
-    // NEW: Trigger forward movement for alternating pattern
+    // Trigger forward movement for alternating pattern
     private void TriggerForwardMovement()
     {
         if (boatController != null)
@@ -314,13 +338,13 @@ public class ESP32BoatIntegration : MonoBehaviour
         enableGyroSteering = !enableGyroSteering;
     }
     
-    // NEW: Public getters for debugging
+    // Public getters for debugging
     public bool IsIdle() => isIdle;
     public bool IsInAlternatingMode() => isInAlternatingMode;
     public int GetTiltHistoryCount() => tiltHistory.Count;
     public float GetIdleAngle() => idleAngle;
     
-    // NEW: Force idle state for testing
+    // Force idle state for testing
     public void ForceIdleState(bool idle)
     {
         isIdle = idle;

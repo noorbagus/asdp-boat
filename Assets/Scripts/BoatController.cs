@@ -2,6 +2,8 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
+public enum PaddleLogic { Keyboard, Gyro }
+
 public class BoatController : MonoBehaviour
 {
     public enum InputMode
@@ -13,6 +15,10 @@ public class BoatController : MonoBehaviour
 
     [Header("Input Settings")]
     [SerializeField] private InputMode inputMode = InputMode.Keyboard;
+    
+    [Header("Paddle Logic")]
+    [Tooltip("Keyboard: Right tilt = Left paddle (for turning right). Gyro: Right tilt = Right paddle (mirror)")]
+    public PaddleLogic paddleLogic = PaddleLogic.Keyboard;
     [SerializeField] private KeyCode leftPaddleKey = KeyCode.LeftArrow;
     [SerializeField] private KeyCode rightPaddleKey = KeyCode.RightArrow;
     [SerializeField] private KeyCode forwardKey = KeyCode.UpArrow;
