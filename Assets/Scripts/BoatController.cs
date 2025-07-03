@@ -14,42 +14,45 @@ public class BoatController : MonoBehaviour
     }
 
     [Header("Input Settings - MANAGED BY CentralInputProcessor")]
-    [SerializeField] private InputMode inputMode = InputMode.BluetoothSensor; // Always use this for external control
+    [SerializeField] private InputMode inputMode = InputMode.BluetoothSensor;
     
     [Header("Paddle Logic")]
     [Tooltip("Keyboard: Right tilt = Left paddle (for turning right). Gyro: Right tilt = Right paddle (mirror)")]
-    public PaddleLogic paddleLogic = PaddleLogic.Keyboard;
+    public PaddleLogic paddleLogic = PaddleLogic.Gyro;
+    
+    [Header("Pattern Integration")]
+    public GyroPatternDetector patternDetector;
     [SerializeField] private float directControlForce = 2.0f;
 
     [Header("Rotation Settings")]
-    [SerializeField] public  float turnAngle = 15f;         // Degrees to turn per paddle
-    [SerializeField] public  float rotationSpeed = 5f;      // Speed of rotation
-    [SerializeField] public  float autoStraightenDelay = 2f; // Time before auto-straighten
-    [SerializeField] public  bool enableAutoStraighten = true;
-    [SerializeField] private bool enableSmoothCurve = true;  // Enable smooth curve interpolation
-    [SerializeField] public  AnimationCurve turnCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
-    [SerializeField] public  Vector3 rotationPivotOffset = Vector3.zero; // Adjust rotation center
+    [SerializeField] public float turnAngle = 15f;
+    [SerializeField] public float rotationSpeed = 5f;
+    [SerializeField] public float autoStraightenDelay = 2f;
+    [SerializeField] public bool enableAutoStraighten = true;
+    [SerializeField] private bool enableSmoothCurve = true;
+    [SerializeField] public AnimationCurve turnCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+    [SerializeField] public Vector3 rotationPivotOffset = Vector3.zero;
 
     [Header("Smooth Rotation")]
     [SerializeField] private bool useSmoothedRotation = true;
-    [SerializeField] private float rotationSmoothing = 8f;  // Higher = more responsive
-    [SerializeField] private float maxRotationSpeed = 120f; // Max degrees/second
+    [SerializeField] private float rotationSmoothing = 8f;
+    [SerializeField] private float maxRotationSpeed = 120f;
 
     [Header("Boat Properties")]
-    [SerializeField] private float forwardSpeed = 0.0f;      // Initial speed (now 0)
-    [SerializeField] private float maxSpeed = 5.0f;          // Maximum speed
-    [SerializeField] private float paddleForce = 0.5f;       // Forward thrust per paddle
-    [SerializeField] private float turnForce = 10.0f;        // Turn force
-    [SerializeField] private float paddleCooldown = 0.5f;    // Cooldown between paddles
-    [SerializeField] private float waterDrag = 0.2f;         // Water resistance
-    [SerializeField] private float bounceFactor = 500f;      // Collision bounce force
-    [SerializeField] private float minSpeedToMakeSound = 0.2f; // Min speed for sound
-    [SerializeField] private bool reverseDirection = false;  // Reverse movement direction
+    [SerializeField] private float forwardSpeed = 0.0f;
+    [SerializeField] private float maxSpeed = 5.0f;
+    [SerializeField] private float paddleForce = 0.5f;
+    [SerializeField] private float turnForce = 10.0f;
+    [SerializeField] private float paddleCooldown = 0.5f;
+    [SerializeField] private float waterDrag = 0.2f;
+    [SerializeField] private float bounceFactor = 500f;
+    [SerializeField] private float minSpeedToMakeSound = 0.2f;
+    [SerializeField] private bool reverseDirection = false;
 
     [Header("Paddle Pattern Settings")]
-    [SerializeField] private float patternTimeWindow = 2.0f;  // Time window for paddle pattern
-    [SerializeField] private int consecutivePaddlesForTurn = 2; // Consecutive paddles needed for turn
-    [SerializeField] private float consecutiveTimeout = 1.5f; // Timeout for consecutive count reset
+    [SerializeField] private float patternTimeWindow = 2.0f;
+    [SerializeField] private int consecutivePaddlesForTurn = 2;
+    [SerializeField] private float consecutiveTimeout = 1.5f;
 
     [Header("Water Current Settings")]
     [SerializeField] private bool inheritWaterCurrent = true;
@@ -80,7 +83,7 @@ public class BoatController : MonoBehaviour
     private List<PaddleStroke> paddleHistory = new List<PaddleStroke>();
     private float currentSpeed = 0.0f;
     
-    // Real-time consecutive tracking - FIXED
+    // Real-time consecutive tracking
     private int currentConsecutiveLeft = 0;
     private int currentConsecutiveRight = 0;
     private float lastPaddleTime = 0f;
@@ -97,15 +100,19 @@ public class BoatController : MonoBehaviour
     private float currentRotationY = 0f;
     private float lastTurnTime = 0f;
     private bool isRotating = false;
-    private float turnProgress = 0f;      // Progress of current turn (0-1)
-    private float startRotationY = 0f;    // Starting rotation for smooth curve
+    private float turnProgress = 0f;
+    private float startRotationY = 0f;
 
-    // Private variables untuk smooth rotation
+    // Smooth rotation variables
     private float targetRotationVelocity = 0f;
     private float currentRotationVelocity = 0f;
-    private float inputDecay = 4f; // How fast input fades
+    private float inputDecay = 4f;
     
-    // Paddle stroke structure
+    // Pattern integration
+    private GyroPatternDetector.MovementPattern lastProcessedPattern = GyroPatternDetector.MovementPattern.Idle;
+    private float patternProcessCooldown = 0f;
+    private const float patternProcessInterval = 0.1f;
+    
     private struct PaddleStroke
     {
         public bool isLeftPaddle;
@@ -118,10 +125,10 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    private void Start()
+    void Start()
     {
         transform.position = new Vector3(0, 0, 0);
-        DebugLog("BoatController Start() called - Input handled by CentralInputProcessor");
+        DebugLog("BoatController Start() - Enhanced pattern integration");
         
         // Initialize rotation
         currentRotationY = transform.eulerAngles.y;
@@ -133,22 +140,31 @@ public class BoatController : MonoBehaviour
         gameManager = FindObjectOfType<GameManager>();
         suimonoModule = FindObjectOfType<Suimono.Core.SuimonoModule>();
         
-        DebugLog($"Components found - Rigidbody: {boatRb != null}, AudioSource: {audioSource != null}, GameManager: {gameManager != null}, Suimono: {suimonoModule != null}");
+        // Auto-find pattern detector if not assigned
+        if (patternDetector == null)
+        {
+            patternDetector = FindObjectOfType<GyroPatternDetector>();
+        }
+        
+        DebugLog($"Components found - Rigidbody: {boatRb != null}, AudioSource: {audioSource != null}, GameManager: {gameManager != null}, Suimono: {suimonoModule != null}, PatternDetector: {patternDetector != null}");
         
         // Add audio source if missing
         if (audioSource == null)
         {
             audioSource = gameObject.AddComponent<AudioSource>();
-            audioSource.spatialBlend = 1.0f; // 3D sound
+            audioSource.spatialBlend = 1.0f;
             audioSource.minDistance = 1.0f;
             audioSource.maxDistance = 20.0f;
             DebugLog("AudioSource component added");
         }
+        
+        // Register for pattern events
+        RegisterPatternEvents();
     }
 
-    private void Update()
+    void Update()
     {
-        // Apply current speed for forward movement with direction control
+        // Apply current speed for forward movement
         Vector3 moveDirection = reverseDirection ? Vector3.back : Vector3.forward;
         transform.Translate(moveDirection * currentSpeed * Time.deltaTime);
         
@@ -165,16 +181,20 @@ public class BoatController : MonoBehaviour
             boatRb.angularVelocity *= (1 - (waterDrag * Time.deltaTime));
         }
 
-        // INPUT PROCESSING REMOVED - NOW HANDLED BY CentralInputProcessor
+        // Process pattern-based movement
+        ProcessPatternMovement();
         
         // Clean up old paddle history
         CleanupPaddleHistory();
         
         // Update consecutive counts
         UpdateConsecutiveCounts();
+        
+        // Update pattern processing cooldown
+        patternProcessCooldown -= Time.deltaTime;
     }
     
-    private void FixedUpdate()
+    void FixedUpdate()
     {
         if (suimonoModule != null)
         {
@@ -182,39 +202,197 @@ public class BoatController : MonoBehaviour
             Vector3 position = transform.position;
             float[] heightData = suimonoModule.SuimonoGetHeightAll(position);
             
-            waterHeight = heightData[1]; // surfaceLevel
-            waveHeight = heightData[8];  // wave height
-            waterDirection = heightData[6]; // direction
-            waterSpeed = heightData[7];  // speed
+            waterHeight = heightData[1];
+            waveHeight = heightData[8];
+            waterDirection = heightData[6];
+            waterSpeed = heightData[7];
             
-            // Apply water current to boat (if enabled)
+            // Apply water current to boat
             if (boatRb != null && inheritWaterCurrent && waterSpeed > 0.01f)
             {
-                // Convert water direction to vector
                 Vector2 waterDirVector = suimonoModule.SuimonoConvertAngleToVector(waterDirection);
                 Vector3 waterForce = new Vector3(waterDirVector.x, 0, waterDirVector.y) * waterSpeed * waterCurrentInfluence;
-                
-                // Apply water current force
                 boatRb.AddForce(waterForce, ForceMode.Acceleration);
             }
         }
     }
     
-    // Clean up paddle history older than time window
+    // Register for pattern detector events
+    private void RegisterPatternEvents()
+    {
+        if (patternDetector != null)
+        {
+            DebugLog("Registering pattern event handlers");
+        }
+    }
+    
+    // Process pattern-based movement
+    private void ProcessPatternMovement()
+    {
+        if (patternDetector == null || patternProcessCooldown > 0f) return;
+        
+        var currentPattern = patternDetector.GetCurrentPattern();
+        float confidence = patternDetector.GetPatternConfidence();
+        
+        // Only process patterns with sufficient confidence
+        if (confidence < 0.5f) return;
+        
+        // Avoid processing the same pattern repeatedly
+        if (currentPattern == lastProcessedPattern) return;
+        
+        lastProcessedPattern = currentPattern;
+        patternProcessCooldown = patternProcessInterval;
+        
+        switch (currentPattern)
+        {
+            case GyroPatternDetector.MovementPattern.Forward:
+                ProcessForwardPattern(confidence);
+                break;
+            case GyroPatternDetector.MovementPattern.TurnLeft:
+                ProcessTurnLeftPattern(confidence);
+                break;
+            case GyroPatternDetector.MovementPattern.TurnRight:
+                ProcessTurnRightPattern(confidence);
+                break;
+            case GyroPatternDetector.MovementPattern.Idle:
+                ProcessIdlePattern();
+                break;
+        }
+    }
+    
+    // Pattern event handlers
+    public void OnPatternChanged(GyroPatternDetector.MovementPattern pattern)
+    {
+        DebugLog($"Pattern changed to: {pattern}");
+    }
+    
+    public void OnForwardPattern(float confidence)
+    {
+        DebugLog($"Forward pattern detected (confidence: {confidence:F2})");
+        AddForwardThrust(confidence);
+    }
+    
+    public void OnTurnLeftPattern(float confidence)
+    {
+        DebugLog($"Turn left pattern detected (confidence: {confidence:F2})");
+        ExecuteTurnLeft(confidence);
+    }
+    
+    public void OnTurnRightPattern(float confidence)
+    {
+        DebugLog($"Turn right pattern detected (confidence: {confidence:F2})");
+        ExecuteTurnRight(confidence);
+    }
+    
+    public void OnIdlePattern(float confidence)
+    {
+        DebugLog($"Idle pattern detected (confidence: {confidence:F2})");
+    }
+    
+    public void OnGestureDetected(string gestureType)
+    {
+        DebugLog($"Gesture detected: {gestureType}");
+        ProcessGesture(gestureType);
+    }
+    
+    // Pattern processing methods
+    private void ProcessForwardPattern(float confidence)
+    {
+        AddForwardThrust(confidence * 0.8f);
+        PlayPaddleEffects(Random.value > 0.5f); // Random side for forward
+    }
+    
+    private void ProcessTurnLeftPattern(float confidence)
+    {
+        ExecuteTurnLeft(confidence);
+        AddForwardThrust(confidence * 0.4f);
+        PlayPaddleEffects(false); // Right paddle for left turn
+    }
+    
+    private void ProcessTurnRightPattern(float confidence)
+    {
+        ExecuteTurnRight(confidence);
+        AddForwardThrust(confidence * 0.4f);
+        PlayPaddleEffects(true); // Left paddle for right turn
+    }
+    
+    private void ProcessIdlePattern()
+    {
+        if (enableAutoStraighten && Time.time - lastTurnTime > autoStraightenDelay)
+        {
+            AutoStraighten();
+        }
+    }
+    
+    private void ExecuteTurnLeft(float confidence)
+    {
+        if (useSmoothedRotation)
+        {
+            targetRotationVelocity = -maxRotationSpeed * confidence;
+            lastTurnTime = Time.time;
+        }
+        else
+        {
+            TurnLeft();
+        }
+    }
+    
+    private void ExecuteTurnRight(float confidence)
+    {
+        if (useSmoothedRotation)
+        {
+            targetRotationVelocity = maxRotationSpeed * confidence;
+            lastTurnTime = Time.time;
+        }
+        else
+        {
+            TurnRight();
+        }
+    }
+    
+    private void AutoStraighten()
+    {
+        float currentY = transform.eulerAngles.y;
+        if (currentY > 180f) currentY -= 360f;
+        
+        float straightenForce = -currentY * 0.5f;
+        targetRotationVelocity += straightenForce * Time.deltaTime;
+    }
+    
+    private void ProcessGesture(string gestureType)
+    {
+        switch (gestureType)
+        {
+            case "START_GAME":
+                if (gameManager != null)
+                {
+                    // gameManager.StartGame();
+                    DebugLog("START_GAME gesture - GameManager method not available");
+                }
+                break;
+            case "RESTART_GAME":
+                if (gameManager != null)
+                {
+                    // gameManager.RestartGame();
+                    DebugLog("RESTART_GAME gesture - GameManager method not available");
+                }
+                break;
+        }
+    }
+    
+    // Clean up paddle history
     private void CleanupPaddleHistory()
     {
         float currentTime = Time.time;
-        
         while (paddleHistory.Count > 0 && currentTime - paddleHistory[0].timestamp > patternTimeWindow)
         {
             paddleHistory.RemoveAt(0);
         }
     }
 
-    // Update consecutive counts with timeout
+    // Update consecutive counts
     private void UpdateConsecutiveCounts()
     {
-        // Reset consecutive counts if too much time has passed since last paddle
         if (Time.time - lastPaddleTime > consecutiveTimeout)
         {
             if (currentConsecutiveLeft > 0 || currentConsecutiveRight > 0)
@@ -226,89 +404,55 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // REMOVED: OnGUI input detection - now handled by CentralInputProcessor
-
     // PUBLIC METHODS - Called by CentralInputProcessor
-    
-    // Called from CentralInputProcessor when left paddle is triggered
     public void PaddleLeft()
     {
         DebugLog("PaddleLeft() called by CentralInputProcessor");
         
-        if (!canPaddleLeft)
-        {
-            DebugLog("PaddleLeft() aborted - cooldown active");
-            return;
-        }
+        if (!canPaddleLeft) return;
 
-        // Set smooth rotation velocity
         if (useSmoothedRotation)
         {
-            targetRotationVelocity = -maxRotationSpeed; // Negative = left turn
+            targetRotationVelocity = -maxRotationSpeed;
             lastTurnTime = Time.time;
         }
 
-        // Record this paddle stroke
         RecordPaddleStroke(true);
-        DebugLog("Left paddle stroke recorded");
-        
-        // Update paddling state
         isLeftPaddling = true;
         isRightPaddling = false;
         
-        // Analyze paddle pattern and apply effects
         AnalyzePaddlePattern();
-
-        // Play effects
         PlayPaddleEffects(true);
-
-        // Cooldown to prevent spam
         StartCoroutine(LeftPaddleCooldown());
     }
 
-    // Called from CentralInputProcessor when right paddle is triggered
     public void PaddleRight()
     {
         DebugLog("PaddleRight() called by CentralInputProcessor");
         
-        if (!canPaddleRight)
-        {
-            DebugLog("PaddleRight() aborted - cooldown active");
-            return;
-        }
+        if (!canPaddleRight) return;
 
-        // Set smooth rotation velocity
         if (useSmoothedRotation)
         {
-            targetRotationVelocity = maxRotationSpeed; // Positive = right turn
+            targetRotationVelocity = maxRotationSpeed;
             lastTurnTime = Time.time;
         }
 
-        // Record this paddle stroke
         RecordPaddleStroke(false);
-        DebugLog("Right paddle stroke recorded");
-        
-        // Update paddling state
         isRightPaddling = true;
         isLeftPaddling = false;
         
-        // Analyze paddle pattern and apply effects
         AnalyzePaddlePattern();
-
-        // Play effects
         PlayPaddleEffects(false);
-
-        // Cooldown to prevent spam
         StartCoroutine(RightPaddleCooldown());
     }
     
-    // Record new paddle stroke with real-time consecutive tracking
+    // Record paddle stroke
     private void RecordPaddleStroke(bool isLeftPaddle)
     {
         paddleHistory.Add(new PaddleStroke(isLeftPaddle, Time.time));
-        DebugLog($"Paddle stroke recorded: {(isLeftPaddle ? "LEFT" : "RIGHT")} at time {Time.time}");
         
-        // Update consecutive counters in real-time
+        // Update consecutive counters
         if (isLeftPaddle)
         {
             if (lastPaddleWasLeft)
@@ -323,7 +467,7 @@ public class BoatController : MonoBehaviour
             }
             lastPaddleWasLeft = true;
         }
-        else // Right paddle
+        else
         {
             if (!lastPaddleWasLeft)
             {
@@ -339,20 +483,11 @@ public class BoatController : MonoBehaviour
         }
         
         lastPaddleTime = Time.time;
-        
-        DebugLog($"Updated consecutive counts - Left: {currentConsecutiveLeft}, Right: {currentConsecutiveRight}");
     }
     
-    // Analyze paddle pattern and apply appropriate effect
+    // Analyze paddle pattern
     private void AnalyzePaddlePattern()
     {
-        DebugLog("AnalyzePaddlePattern() called");
-        
-        // Count consecutive left and right paddles
-        int consecutiveLeft = 0;
-        int consecutiveRight = 0;
-        bool alternatingPattern = false;
-        
         // Check for alternating pattern (forward movement)
         if (paddleHistory.Count >= 2)
         {
@@ -361,76 +496,42 @@ public class BoatController : MonoBehaviour
             
             if (lastWasLeft != secondLastWasLeft)
             {
-                // Alternating pattern detected
-                alternatingPattern = true;
-                DebugLog("ALTERNATING PATTERN detected - adding forward thrust");
                 AddForwardThrust();
+                return;
             }
         }
-        
-        // Count consecutive paddles
-        for (int i = paddleHistory.Count - 1; i >= 0; i--)
-        {
-            if (paddleHistory[i].isLeftPaddle)
-            {
-                if (consecutiveRight > 0) break; // Sequence changed
-                consecutiveLeft++;
-            }
-            else // Right paddle
-            {
-                if (consecutiveLeft > 0) break; // Sequence changed
-                consecutiveRight++;
-            }
-        }
-        
-        DebugLog($"Consecutive Left: {consecutiveLeft}, Consecutive Right: {consecutiveRight}");
         
         // Apply turn effect if enough consecutive paddles
-        if (consecutiveLeft >= consecutivePaddlesForTurn)
+        if (currentConsecutiveLeft >= consecutivePaddlesForTurn)
         {
-            // Consecutive left paddles: turn right
-            DebugLog("TURN RIGHT pattern detected");
             TurnRight();
         }
-        else if (consecutiveRight >= consecutivePaddlesForTurn)
+        else if (currentConsecutiveRight >= consecutivePaddlesForTurn)
         {
-            // Consecutive right paddles: turn left
-            DebugLog("TURN LEFT pattern detected");
             TurnLeft();
         }
-        
-        // If no alternating pattern and not enough consecutive paddles, 
-        // still add a small forward thrust
-        if (!alternatingPattern && consecutiveLeft < consecutivePaddlesForTurn && 
-            consecutiveRight < consecutivePaddlesForTurn)
+        else
         {
-            DebugLog("Single paddle - adding half forward thrust");
-            AddForwardThrust(0.5f); // Half strength
+            AddForwardThrust(0.5f);
         }
     }
     
-    // Add forward thrust - Made public for CentralInputProcessor
+    // Add forward thrust
     public void AddForwardThrust(float multiplier = 1.0f)
     {
         float oldSpeed = currentSpeed;
-        // Add forward speed
         currentSpeed = Mathf.Min(maxSpeed, currentSpeed + (paddleForce * multiplier));
-        DebugLog($"Forward thrust added: {oldSpeed:F2} -> {currentSpeed:F2} (multiplier: {multiplier:F2})");
+        DebugLog($"Forward thrust: {oldSpeed:F2} -> {currentSpeed:F2} (x{multiplier:F2})");
     }
     
-    // Smooth rotation handling
+    // Rotation handling
     private void UpdateRotation()
     {
         if (useSmoothedRotation)
         {
-            // Decay input over time
             targetRotationVelocity = Mathf.Lerp(targetRotationVelocity, 0f, inputDecay * Time.deltaTime);
+            currentRotationVelocity = Mathf.Lerp(currentRotationVelocity, targetRotationVelocity, rotationSmoothing * Time.deltaTime);
             
-            // Smooth the velocity
-            currentRotationVelocity = Mathf.Lerp(currentRotationVelocity, targetRotationVelocity, 
-                                                rotationSmoothing * Time.deltaTime);
-            
-            // Apply rotation with pivot support
             float rotationThisFrame = currentRotationVelocity * Time.deltaTime;
             if (rotationPivotOffset != Vector3.zero)
             {
@@ -442,23 +543,19 @@ public class BoatController : MonoBehaviour
                 transform.Rotate(0, rotationThisFrame, 0);
             }
             
-            // Update tracking
             currentRotationY = transform.eulerAngles.y;
             
-            // Auto-straighten when no input and after delay
-            if (enableAutoStraighten && Mathf.Abs(targetRotationVelocity) < 5f && 
-                Time.time - lastTurnTime > autoStraightenDelay)
+            if (enableAutoStraighten && Mathf.Abs(targetRotationVelocity) < 5f && Time.time - lastTurnTime > autoStraightenDelay)
             {
                 float currentY = transform.eulerAngles.y;
-                if (currentY > 180f) currentY -= 360f; // Convert to -180 to 180 range
-                
-                float straightenForce = -currentY * 0.8f; // Proportional force towards 0
+                if (currentY > 180f) currentY -= 360f;
+                float straightenForce = -currentY * 0.8f;
                 targetRotationVelocity += straightenForce * Time.deltaTime;
             }
         }
         else
         {
-            // Original rotation code
+            // Original rotation handling
             if (isRotating)
             {
                 turnProgress += rotationSpeed * Time.deltaTime;
@@ -483,199 +580,129 @@ public class BoatController : MonoBehaviour
                     ApplyRotationAroundPivot();
                 }
             }
-            else
-            {
-                if (enableAutoStraighten && Time.time - lastTurnTime > autoStraightenDelay)
-                {
-                    float straightAngle = 0f;
-                    if (Mathf.Abs(Mathf.DeltaAngle(targetRotationY, straightAngle)) > 5f)
-                    {
-                        targetRotationY = Mathf.LerpAngle(targetRotationY, straightAngle, Time.deltaTime * 0.1f);
-                        ApplyRotationAroundPivot();
-                    }
-                }
-            }
         }
     }
 
-    // Apply rotation around custom pivot point
     private void ApplyRotationAroundPivot()
     {
         Vector3 pivotWorldPos = transform.position + transform.TransformDirection(rotationPivotOffset);
         transform.RotateAround(pivotWorldPos, Vector3.up, currentRotationY - transform.eulerAngles.y);
     }
     
-    // Turn left effect (smooth rotation)
+    // Turn methods
     private void TurnLeft()
     {
-        DebugLog("Executing smooth turn left");
-        
-        // Store starting rotation for smooth curve
         startRotationY = currentRotationY;
         targetRotationY -= turnAngle;
         lastTurnTime = Time.time;
         isRotating = true;
         turnProgress = 0f;
         
-        // Optional: Keep rigidbody physics for water interaction
         if (boatRb != null)
         {
             boatRb.AddTorque(Vector3.up * -turnForce * 0.3f, ForceMode.Impulse);
         }
     }
     
-    // Turn right effect (smooth rotation)
     private void TurnRight()
     {
-        DebugLog("Executing smooth turn right");
-        
-        // Store starting rotation for smooth curve
         startRotationY = currentRotationY;
         targetRotationY += turnAngle;
         lastTurnTime = Time.time;
         isRotating = true;
         turnProgress = 0f;
         
-        // Optional: Keep rigidbody physics for water interaction
         if (boatRb != null)
         {
             boatRb.AddTorque(Vector3.up * turnForce * 0.3f, ForceMode.Impulse);
         }
     }
 
+    // Effects
     private void PlayPaddleEffects(bool isLeft)
     {
-        DebugLog($"Playing paddle effects for {(isLeft ? "LEFT" : "RIGHT")} paddle");
-        
-        // Position water splash effect at correct side
         Vector3 splashPos = transform.position + (isLeft ? -transform.right : transform.right) * 1.5f;
         splashPos.y = transform.position.y - 0.2f;
         
-        // Instantiate splash effect
         if (waterSplashEffect != null)
         {
             ParticleSystem splash = Instantiate(waterSplashEffect, splashPos, Quaternion.identity);
             Destroy(splash.gameObject, 2f);
-            DebugLog("Water splash effect created");
-        }
-        else
-        {
-            DebugLog("No water splash effect assigned");
         }
 
-        // Play sound
         if (audioSource != null && paddleSound != null && currentSpeed >= minSpeedToMakeSound)
         {
-            // Adjust volume and pitch based on speed and randomness
             float intensityFactor = Mathf.Clamp01(currentSpeed / maxSpeed);
             float volume = 0.5f + (intensityFactor * 0.5f);
             float pitch = Random.Range(0.9f, 1.1f);
             
             audioSource.pitch = pitch;
             audioSource.PlayOneShot(paddleSound, volume);
-            DebugLog($"Paddle sound played - volume: {volume:F2}, pitch: {pitch:F2}");
-        }
-        else
-        {
-            DebugLog($"Paddle sound not played - AudioSource: {audioSource != null}, PaddleSound: {paddleSound != null}, Speed: {currentSpeed:F2}, MinSpeed: {minSpeedToMakeSound}");
         }
     }
 
+    // Cooldown coroutines
     private IEnumerator LeftPaddleCooldown()
     {
-        DebugLog("Left paddle cooldown started");
         canPaddleLeft = false;
         yield return new WaitForSeconds(paddleCooldown);
         canPaddleLeft = true;
-        
-        // Reset paddle state after cooldown
         isLeftPaddling = false;
-        DebugLog("Left paddle cooldown ended");
     }
 
     private IEnumerator RightPaddleCooldown()
     {
-        DebugLog("Right paddle cooldown started");
         canPaddleRight = false;
         yield return new WaitForSeconds(paddleCooldown);
         canPaddleRight = true;
-        
-        // Reset paddle state after cooldown
         isRightPaddling = false;
-        DebugLog("Right paddle cooldown ended");
     }
 
-   private void OnCollisionEnter(Collision collision)
+    // Collision handling
+    void OnCollisionEnter(Collision collision)
     {
-        DebugLog($"Collision detected with: {collision.gameObject.name}");
-        
         if (collision.gameObject.CompareTag("Obstacle"))
         {
-            DebugLog("Collision with obstacle!");
-            
-            // Get obstacle component for damage info
             ObstacleBase obstacle = collision.gameObject.GetComponent<ObstacleBase>();
-            int damageAmount = (obstacle != null && obstacle.GetType().GetMethod("GetDamageAmount") != null) ? 
-                               obstacle.GetDamageAmount() : 10;
+            int damageAmount = (obstacle != null) ? obstacle.GetDamageAmount() : 10;
             
-            // Damage player
             if (gameManager != null)
             {
                 gameManager.TakeDamage(damageAmount);
-                DebugLog($"Damage dealt: {damageAmount}");
             }
 
-            // Calculate collision intensity based on speed
             float collisionIntensity = Mathf.Clamp01(currentSpeed / maxSpeed);
-            
-            // Bounce effect
             Vector3 bounceDir = transform.position - collision.transform.position;
-            bounceDir.y = 0; // Keep bounce horizontal
+            bounceDir.y = 0;
             boatRb.AddForce(bounceDir.normalized * bounceFactor * collisionIntensity, ForceMode.Impulse);
-
-            // Slow down boat based on collision intensity
+            
             currentSpeed *= (1.0f - (collisionIntensity * 0.5f));
 
-            // Play sound
             if (audioSource != null && collisionSound != null)
             {
                 audioSource.pitch = Random.Range(0.9f, 1.1f);
                 audioSource.PlayOneShot(collisionSound, collisionIntensity);
-                DebugLog("Collision sound played");
             }
         }
     }
 
-    private void OnTriggerEnter(Collider other)
+    void OnTriggerEnter(Collider other)
     {
-        DebugLog($"Trigger entered: {other.gameObject.name}");
-        
         if (other.CompareTag("Award"))
         {
-            DebugLog("Award collected!");
-            
-            // Get treasure box component
             TreasureBox treasureBox = other.GetComponent<TreasureBox>();
-            
             if (treasureBox != null && gameManager != null)
             {
-                // Add score
                 gameManager.AddScore(treasureBox.pointValue);
-                DebugLog($"Score added: {treasureBox.pointValue}");
             }
 
-            // Play collect effect
             if (audioSource != null && collectSound != null)
             {
                 audioSource.PlayOneShot(collectSound);
-                DebugLog("Collect sound played");
             }
         }
         else if (other.CompareTag("FinishLine"))
         {
-            DebugLog("Finish line reached!");
-            
-            // Level complete
             if (gameManager != null)
             {
                 gameManager.LevelComplete();
@@ -683,32 +710,19 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // Set input mode - kept for compatibility but input handled by CentralInputProcessor
+    // Public accessors
     public void SetInputMode(InputMode mode)
     {
         inputMode = mode;
-        DebugLog($"Input mode changed to: {mode} - (Handled by CentralInputProcessor)");
     }
     
-    // Public accessors for external components
-    public float GetCurrentSpeed() { return currentSpeed; }
-    public float GetMaxSpeed() { return maxSpeed; }
-    public bool IsLeftPaddling() { return isLeftPaddling; }
-    public bool IsRightPaddling() { return isRightPaddling; }
-    public InputMode GetInputMode() { return inputMode; }
-    
-    // For debugging and visualization - now uses real-time tracking
-    public int GetConsecutiveLeftCount()
-    {
-        // Return current consecutive count instead of calculating from history
-        return currentConsecutiveLeft;
-    }
-    
-    public int GetConsecutiveRightCount()
-    {
-        // Return current consecutive count instead of calculating from history
-        return currentConsecutiveRight;
-    }
+    public float GetCurrentSpeed() => currentSpeed;
+    public float GetMaxSpeed() => maxSpeed;
+    public bool IsLeftPaddling() => isLeftPaddling;
+    public bool IsRightPaddling() => isRightPaddling;
+    public InputMode GetInputMode() => inputMode;
+    public int GetConsecutiveLeftCount() => currentConsecutiveLeft;
+    public int GetConsecutiveRightCount() => currentConsecutiveRight;
     
     public List<bool> GetPaddleHistory()
     {
@@ -720,7 +734,6 @@ public class BoatController : MonoBehaviour
         return history;
     }
     
-    // Debug logging method
     private void DebugLog(string message)
     {
         if (enableDebugLogs)
@@ -728,7 +741,4 @@ public class BoatController : MonoBehaviour
             Debug.Log($"[BoatController] {message}");
         }
     }
-
-    // REMOVED: OnGUI method for input - now handled by CentralInputProcessor
-    // Input processing is centralized in CentralInputProcessor component
 }

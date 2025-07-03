@@ -10,9 +10,15 @@ public class ESP32GyroController : MonoBehaviour
     public bool autoConnect = true;
     public float connectionTimeout = 30f;
     
-    [Header("Data Processing")]
+    [Header("Multi-Axis Data Processing")]
     public float dataSmoothing = 0.5f;
-    public float gyroMultiplier = 2.0f;
+    public Vector3 axisWeights = new Vector3(0.3f, 0.2f, 0.5f); // X,Y,Z weights
+    
+    [Header("Thresholds")]
+    public float gyroXThreshold = 15f;        // Primary detection
+    public float gyroYThreshold = 10f;        // Paddle depth validation
+    public float gyroZThreshold = 5f;         // Roll stability
+    public float totalMovementThreshold = 25f; // Combined movement
     
     [Header("Idle Settings")]
     public bool maintainIdleAngle = true;
@@ -20,8 +26,9 @@ public class ESP32GyroController : MonoBehaviour
     public float idleReturnSpeed = 0.05f;
     private float idleBaseAngle = 0f;
     
-    [Header("Paddle Integration")]
+    [Header("Integration")]
     public PaddleIKController paddleController;
+    public GyroPatternDetector patternDetector;
     
     [Header("Debug")]
     public bool enableDebugLogs = true;
@@ -33,23 +40,29 @@ public class ESP32GyroController : MonoBehaviour
     private bool isConnecting = false;
     private bool isScanning = false;
     private float connectionTimer = 0f;
-    private string lastPacket = "";
     
-    // Data values
-    private float currentGyroX = 0f;
+    // Multi-axis data values
+    private Vector3 currentGyro = Vector3.zero;
     private int currentAccelY = 0;
-    private float smoothedGyroX = 0f;
+    private Vector3 smoothedGyro = Vector3.zero;
+    private float combinedMovement = 0f;
     
-    // Monitoring
+    // Packet tracking
+    private string lastPacket = "";
     private float lastDataTime = 0f;
     private int packetsReceived = 0;
     private int errorPackets = 0;
+    private int heartbeatPackets = 0;
+    
+    // Connection recovery
+    private int connectionRetries = 0;
+    private const int maxConnectionRetries = 5;
+    private float lastConnectionAttempt = 0f;
+    private const float retryDelay = 3f;
     
     void Start()
     {
-        if (debugText != null)
-            debugText.text = "Starting...";
-        
+        UpdateDebugText("Starting ESP32 controller...");
         InitializeBluetooth();
         
         if (autoConnect)
@@ -58,23 +71,32 @@ public class ESP32GyroController : MonoBehaviour
     
     void Update()
     {
-        // Update connection indicator color based on state
         UpdateConnectionIndicator();
         
-        // Update paddle controller with gyro data
-        if (paddleController != null && bluetoothHelper != null && bluetoothHelper.isConnected())
+        // Update pattern detector with multi-axis data
+        if (patternDetector != null && IsConnected())
         {
-            // Apply smoothing to gyro value
-            smoothedGyroX = Mathf.Lerp(smoothedGyroX, (currentGyroX - idleBaseAngle) * gyroMultiplier, dataSmoothing * Time.deltaTime * 10f);
+            patternDetector.UpdateGyroData(currentGyro, currentAccelY);
+        }
+        
+        // Update paddle controller
+        if (paddleController != null && IsConnected())
+        {
+            // Apply smoothing to all axes
+            smoothedGyro = Vector3.Lerp(smoothedGyro, currentGyro, dataSmoothing * Time.deltaTime * 10f);
             
-            // Send the inverted value to paddle controller (negate to fix direction)
-            paddleController.SetRawAngle(-smoothedGyroX);
+            // Calculate combined movement for pattern detection
+            combinedMovement = (smoothedGyro.x * axisWeights.x) + 
+                              (smoothedGyro.y * axisWeights.y) + 
+                              (smoothedGyro.z * axisWeights.z);
             
-            // Monitor data freshness - if no data for 5 seconds, something's wrong
-            if (Time.time - lastDataTime > 5f)
+            // Send Z-axis to paddle (primary visual axis)
+            paddleController.SetRawAngle(-smoothedGyro.z); // Negate for correct direction
+            
+            // Handle idle angle adaptation
+            if (maintainIdleAngle && IsMovementStable())
             {
-                DebugLog("⚠️ No data received for 5 seconds!");
-                // Consider reconnecting here
+                idleBaseAngle = Mathf.Lerp(idleBaseAngle, smoothedGyro.z, idleReturnSpeed);
             }
         }
         
@@ -84,10 +106,15 @@ public class ESP32GyroController : MonoBehaviour
             connectionTimer += Time.deltaTime;
             if (connectionTimer > connectionTimeout)
             {
-                DebugLog("Connection timeout - reconnecting");
-                DisconnectBluetooth();
-                StartCoroutine(AutoConnectRoutine());
+                HandleConnectionTimeout();
             }
+        }
+        
+        // Check data freshness
+        if (IsConnected() && Time.time - lastDataTime > 5f)
+        {
+            DebugLog("⚠️ No data for 5 seconds - connection may be lost");
+            HandleConnectionLoss();
         }
     }
     
@@ -95,46 +122,38 @@ public class ESP32GyroController : MonoBehaviour
     {
         try
         {
-            DebugLog("Initializing Bluetooth...");
+            DebugLog("Initializing Bluetooth for multi-axis gyro...");
             
-            // Configure Bluetooth settings for ESP32
-            BluetoothHelper.BLE = false; // Using classic Bluetooth for ESP32
-            
-            // Create Bluetooth helper instance
+            BluetoothHelper.BLE = false; // Classic Bluetooth for ESP32
             bluetoothHelper = BluetoothHelper.GetInstance(deviceName);
             
-            // Register event handlers
+            // Register enhanced event handlers
             bluetoothHelper.OnConnected += OnConnected;
             bluetoothHelper.OnConnectionFailed += OnConnectionFailed;
             bluetoothHelper.OnDataReceived += OnDataReceived;
             bluetoothHelper.OnScanEnded += OnScanEnded;
             
-            // Configure data stream format
+            // Configure for new data format
             bluetoothHelper.setTerminatorBasedStream("\n");
             
-            DebugLog("Bluetooth initialized successfully");
+            DebugLog("✓ Bluetooth initialized for 30-char format");
         }
         catch (Exception ex)
         {
-            DebugLog("ERROR: " + ex.Message);
+            DebugLog($"✗ Bluetooth init error: {ex.Message}");
+            UpdateDebugText($"Init Error: {ex.Message}");
         }
     }
     
-    // Automatically connect to the device
     private IEnumerator AutoConnectRoutine()
     {
         yield return new WaitForSeconds(1f);
         ConnectToDevice();
     }
     
-    // Connect to the ESP32 device
     public void ConnectToDevice()
     {
-        if (bluetoothHelper == null)
-        {
-            DebugLog("ERROR: Bluetooth helper not initialized");
-            return;
-        }
+        if (bluetoothHelper == null || isConnecting) return;
         
         if (bluetoothHelper.isConnected())
         {
@@ -142,107 +161,105 @@ public class ESP32GyroController : MonoBehaviour
             return;
         }
         
+        if (connectionRetries >= maxConnectionRetries)
+        {
+            DebugLog($"Max connection retries ({maxConnectionRetries}) reached");
+            return;
+        }
+        
+        if (Time.time - lastConnectionAttempt < retryDelay)
+        {
+            DebugLog("Waiting for retry delay...");
+            return;
+        }
+        
         try
         {
-            DebugLog("Scanning for device: " + deviceName);
+            DebugLog($"Connecting to {deviceName} (attempt {connectionRetries + 1})...");
+            lastConnectionAttempt = Time.time;
+            
             isScanning = bluetoothHelper.ScanNearbyDevices();
             
             if (!isScanning)
             {
-                // If scanning didn't start, try direct connection
-                DebugLog("Trying direct connection...");
+                DebugLog("Direct connection attempt...");
                 isConnecting = true;
                 connectionTimer = 0f;
                 bluetoothHelper.Connect();
             }
+            
+            connectionRetries++;
         }
         catch (Exception ex)
         {
-            DebugLog("Connection error: " + ex.Message);
-            isConnecting = false;
+            DebugLog($"Connection error: {ex.Message}");
+            HandleConnectionError();
         }
     }
     
-    // Disconnect from the device
     public void DisconnectBluetooth()
     {
         if (bluetoothHelper != null && bluetoothHelper.isConnected())
         {
             bluetoothHelper.Disconnect();
-            DebugLog("Disconnected from device");
+            DebugLog("Manually disconnected");
         }
         
-        isConnecting = false;
-        isScanning = false;
+        ResetConnectionState();
     }
     
-    // Handle scan completion event
     private void OnScanEnded(BluetoothHelper helper, System.Collections.Generic.LinkedList<BluetoothDevice> devices)
     {
-        DebugLog($"Scan ended - found {devices.Count} devices");
+        DebugLog($"Scan ended - {devices.Count} devices found");
         isScanning = false;
         
         if (helper.isDevicePaired())
         {
-            DebugLog("Device found, connecting...");
+            DebugLog("Device paired - connecting...");
             isConnecting = true;
             connectionTimer = 0f;
             helper.Connect();
         }
         else
         {
-            DebugLog("Device not found, rescanning...");
-            // Wait before rescanning to avoid flooding
-            StartCoroutine(RetryScan());
+            DebugLog("Device not paired - retrying...");
+            StartCoroutine(RetryScanAfterDelay());
         }
     }
     
-    private IEnumerator RetryScan()
+    private IEnumerator RetryScanAfterDelay()
     {
-        yield return new WaitForSeconds(3f);
-        if (!bluetoothHelper.isConnected())
-        {
-            isScanning = bluetoothHelper.ScanNearbyDevices();
-        }
-    }
-    
-    // Handle successful connection event
-    private void OnConnected(BluetoothHelper helper)
-    {
-        DebugLog("✓ Connected to " + deviceName);
-        isConnecting = false;
-        
-        try
-        {
-            helper.StartListening();
-            DebugLog("Listening for data...");
-        }
-        catch (Exception ex)
-        {
-            DebugLog("Error starting listener: " + ex.Message);
-        }
-    }
-    
-    // Handle failed connection event
-    private void OnConnectionFailed(BluetoothHelper helper)
-    {
-        DebugLog("✗ Connection failed or lost");
-        isConnecting = false;
-        
-        // Auto-reconnect after delay
-        StartCoroutine(ReconnectAfterDelay());
-    }
-    
-    private IEnumerator ReconnectAfterDelay()
-    {
-        yield return new WaitForSeconds(3f);
-        if (!bluetoothHelper.isConnected())
+        yield return new WaitForSeconds(retryDelay);
+        if (!bluetoothHelper.isConnected() && connectionRetries < maxConnectionRetries)
         {
             ConnectToDevice();
         }
     }
     
-    // Handle data received event
+    private void OnConnected(BluetoothHelper helper)
+    {
+        DebugLog($"✓ Connected to {deviceName}");
+        isConnecting = false;
+        connectionRetries = 0; // Reset retry counter
+        
+        try
+        {
+            helper.StartListening();
+            DebugLog("Listening for 30-char packets...");
+            UpdateDebugText("Connected - Listening for data");
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"Error starting listener: {ex.Message}");
+        }
+    }
+    
+    private void OnConnectionFailed(BluetoothHelper helper)
+    {
+        DebugLog("✗ Connection failed");
+        HandleConnectionError();
+    }
+    
     private void OnDataReceived(BluetoothHelper helper)
     {
         string data = helper.Read();
@@ -250,65 +267,158 @@ public class ESP32GyroController : MonoBehaviour
         lastDataTime = Time.time;
         packetsReceived++;
         
-        // Process the received data
-        ProcessData(data);
+        ProcessEnhancedData(data);
     }
     
-    // Process data received from ESP32
-    private void ProcessData(string data)
+    private void ProcessEnhancedData(string data)
     {
         try
         {
-            // Check for heartbeat packet
+            // Handle heartbeat
             if (data.StartsWith("HALIVE"))
             {
-                // This is just a keepalive packet
+                heartbeatPackets++;
+                DebugLog("💓 Heartbeat received");
                 return;
             }
             
-            // Process gyro/accel data packet (format: G+000.0A+00000C0X)
-            if (data.Length >= 15 && data.StartsWith("G") && data.Contains("A"))
+            // Validate 30-char format: G+012.3X+045.6Y-023.1A+01234C9N
+            if (data.Length != 30 || !data.StartsWith("G") || !data.EndsWith("N"))
             {
-                // Extract gyro value
-                int aPos = data.IndexOf('A');
-                if (aPos >= 2 && aPos <= 8)
-                {
-                    string gyroStr = data.Substring(1, aPos - 1);
-                    float gyroValue;
-                    if (float.TryParse(gyroStr, out gyroValue))
-                    {
-                        currentGyroX = gyroValue;
-                        
-                        // If maintainIdleAngle is enabled and the gyro value is stable, update idle base angle
-                        if (maintainIdleAngle && Mathf.Abs(currentGyroX) < 5.0f)
-                        {
-                            // Slowly adapt idle angle to current stable position
-                            idleBaseAngle = Mathf.Lerp(idleBaseAngle, currentGyroX, idleReturnSpeed);
-                        }
-                        
-                        // Display debug info
-                        if (debugText != null)
-                        {
-                            debugText.text = $"Gyro: {currentGyroX:F1}°\nIdle: {idleBaseAngle:F1}°\nPackets: {packetsReceived}\nErrors: {errorPackets}";
-                        }
-                    }
-                }
-            }
-            else
-            {
-                // Invalid packet format
                 errorPackets++;
-                DebugLog($"Invalid packet: {data}");
+                DebugLog($"Invalid packet format: {data} (len={data.Length})");
+                return;
             }
+            
+            // Extract gyro data
+            if (!ExtractGyroData(data))
+            {
+                errorPackets++;
+                return;
+            }
+            
+            // Update debug display
+            UpdateDebugText($"Gyro X:{currentGyro.x:F1}° Y:{currentGyro.y:F1}° Z:{currentGyro.z:F1}°\n" +
+                           $"AccelY:{currentAccelY}\n" +
+                           $"Combined:{combinedMovement:F1}°\n" +
+                           $"Packets:{packetsReceived} Errors:{errorPackets}");
+            
         }
         catch (Exception ex)
         {
             errorPackets++;
-            DebugLog($"Error parsing data: {ex.Message}");
+            DebugLog($"Data processing error: {ex.Message}");
         }
     }
     
-    // Update connection indicator object color
+    private bool ExtractGyroData(string data)
+    {
+        try
+        {
+            // Parse: G+012.3X+045.6Y-023.1A+01234C9N
+            //       0123456789012345678901234567890
+            
+            // Extract gyro values
+            string gyroXStr = data.Substring(1, 6);   // +012.3
+            string gyroYStr = data.Substring(8, 6);   // +045.6
+            string gyroZStr = data.Substring(15, 6);  // -023.1
+            string accelYStr = data.Substring(22, 5); // +01234
+            char checksumChar = data[27];             // 9
+            
+            // Parse values
+            float gyroX, gyroY, gyroZ;
+            int accelY;
+            
+            if (!float.TryParse(gyroXStr, out gyroX) ||
+                !float.TryParse(gyroYStr, out gyroY) ||
+                !float.TryParse(gyroZStr, out gyroZ) ||
+                !int.TryParse(accelYStr, out accelY))
+            {
+                DebugLog("Failed to parse numeric values");
+                return false;
+            }
+            
+            // Validate checksum
+            if (!ValidateChecksum(data, checksumChar))
+            {
+                DebugLog("Checksum validation failed");
+                return false;
+            }
+            
+            // Update current values
+            currentGyro = new Vector3(gyroX, gyroY, gyroZ);
+            currentAccelY = accelY;
+            
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DebugLog($"Parsing error: {ex.Message}");
+            return false;
+        }
+    }
+    
+    private bool ValidateChecksum(string data, char checksumChar)
+    {
+        try
+        {
+            int calculatedSum = 0;
+            for (int i = 0; i < 25; i++)
+            {
+                calculatedSum += data[i];
+            }
+            
+            int expectedChecksum = calculatedSum % 10;
+            int receivedChecksum = int.Parse(checksumChar.ToString());
+            
+            return expectedChecksum == receivedChecksum;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    
+    private bool IsMovementStable()
+    {
+        return Vector3.Magnitude(currentGyro) < 5.0f;
+    }
+    
+    private void HandleConnectionTimeout()
+    {
+        DebugLog("Connection timeout");
+        HandleConnectionError();
+    }
+    
+    private void HandleConnectionLoss()
+    {
+        DebugLog("Connection lost - attempting reconnection");
+        ResetConnectionState();
+        StartCoroutine(ReconnectAfterDelay());
+    }
+    
+    private void HandleConnectionError()
+    {
+        isConnecting = false;
+        StartCoroutine(ReconnectAfterDelay());
+    }
+    
+    private IEnumerator ReconnectAfterDelay()
+    {
+        yield return new WaitForSeconds(retryDelay);
+        if (!bluetoothHelper.isConnected() && connectionRetries < maxConnectionRetries)
+        {
+            ConnectToDevice();
+        }
+    }
+    
+    private void ResetConnectionState()
+    {
+        isConnecting = false;
+        isScanning = false;
+        connectionTimer = 0f;
+    }
+    
     private void UpdateConnectionIndicator()
     {
         if (connectionIndicator == null) return;
@@ -316,56 +426,51 @@ public class ESP32GyroController : MonoBehaviour
         Renderer renderer = connectionIndicator.GetComponent<Renderer>();
         if (renderer != null)
         {
-            if (bluetoothHelper != null && bluetoothHelper.isConnected())
+            if (IsConnected())
             {
-                // Connected - green
                 renderer.material.color = Color.green;
             }
             else if (isConnecting || isScanning)
             {
-                // Connecting - yellow
                 renderer.material.color = Color.yellow;
             }
             else
             {
-                // Disconnected - red
                 renderer.material.color = Color.red;
             }
         }
     }
     
-    // Debug log helper
+    private void UpdateDebugText(string text)
+    {
+        if (debugText != null)
+        {
+            debugText.text = text;
+        }
+    }
+    
     private void DebugLog(string message)
     {
         if (enableDebugLogs)
         {
-            Debug.Log($"[ESP32Gyro] {message}");
+            Debug.Log($"[ESP32Multi] {message}");
         }
     }
     
-    // Check if ESP32 is connected
-    public bool IsConnected()
-    {
-        return bluetoothHelper != null && bluetoothHelper.isConnected();
-    }
+    // Public API
+    public bool IsConnected() => bluetoothHelper != null && bluetoothHelper.isConnected();
+    public Vector3 GetCurrentGyro() => currentGyro;
+    public Vector3 GetSmoothedGyro() => smoothedGyro;
+    public int GetCurrentAccelY() => currentAccelY;
+    public float GetCombinedMovement() => combinedMovement;
+    public string GetLastPacket() => lastPacket;
+    public int GetPacketsReceived() => packetsReceived;
+    public int GetErrorPackets() => errorPackets;
+    public int GetHeartbeatPackets() => heartbeatPackets;
     
-    // Get the current gyro value
-    public float GetGyroValue()
-    {
-        return currentGyroX;
-    }
-    
-    // Get the smoothed gyro value
-    public float GetSmoothedGyroValue()
-    {
-        return smoothedGyroX;
-    }
-    
-    // Get the last received packet
-    public string GetLastPacket()
-    {
-        return lastPacket;
-    }
+    // Legacy compatibility (returns Z-axis)
+    public float GetGyroValue() => currentGyro.z;
+    public float GetSmoothedGyroValue() => smoothedGyro.z;
     
     void OnDestroy()
     {
