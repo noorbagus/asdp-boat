@@ -51,6 +51,7 @@ public class ESP32GyroController : MonoBehaviour
     private string lastPacket = "";
     private float lastDataTime = 0f;
     private int packetsReceived = 0;
+    private int validPackets = 0;
     private int errorPackets = 0;
     private int heartbeatPackets = 0;
     
@@ -63,6 +64,7 @@ public class ESP32GyroController : MonoBehaviour
     void Start()
     {
         UpdateDebugText("Starting ESP32 controller...");
+        CreateIndicatorIfNeeded();
         InitializeBluetooth();
         
         if (autoConnect)
@@ -111,10 +113,21 @@ public class ESP32GyroController : MonoBehaviour
         }
         
         // Check data freshness
-        if (IsConnected() && Time.time - lastDataTime > 5f)
+        if (IsConnected() && Time.time - lastDataTime > 5f && lastDataTime > 0f)
         {
             DebugLog("⚠️ No data for 5 seconds - connection may be lost");
             HandleConnectionLoss();
+        }
+    }
+    
+    private void CreateIndicatorIfNeeded()
+    {
+        if (connectionIndicator == null)
+        {
+            connectionIndicator = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            connectionIndicator.name = "ESP32_ConnectionIndicator";
+            connectionIndicator.transform.position = Vector3.up * 2f;
+            connectionIndicator.transform.localScale = Vector3.one * 0.3f;
         }
     }
     
@@ -122,21 +135,21 @@ public class ESP32GyroController : MonoBehaviour
     {
         try
         {
-            DebugLog("Initializing Bluetooth for multi-axis gyro...");
+            DebugLog("Initializing Bluetooth for ESP32 30-char format...");
             
             BluetoothHelper.BLE = false; // Classic Bluetooth for ESP32
             bluetoothHelper = BluetoothHelper.GetInstance(deviceName);
             
-            // Register enhanced event handlers
+            // Register event handlers
             bluetoothHelper.OnConnected += OnConnected;
             bluetoothHelper.OnConnectionFailed += OnConnectionFailed;
             bluetoothHelper.OnDataReceived += OnDataReceived;
             bluetoothHelper.OnScanEnded += OnScanEnded;
             
-            // Configure for new data format
+            // Configure for ESP32 data format with \n terminator
             bluetoothHelper.setTerminatorBasedStream("\n");
             
-            DebugLog("✓ Bluetooth initialized for 30-char format");
+            DebugLog("✓ Bluetooth initialized for ESP32 format");
         }
         catch (Exception ex)
         {
@@ -245,7 +258,7 @@ public class ESP32GyroController : MonoBehaviour
         try
         {
             helper.StartListening();
-            DebugLog("Listening for 30-char packets...");
+            DebugLog("Listening for ESP32 30-char packets...");
             UpdateDebugText("Connected - Listening for data");
         }
         catch (Exception ex)
@@ -263,45 +276,74 @@ public class ESP32GyroController : MonoBehaviour
     private void OnDataReceived(BluetoothHelper helper)
     {
         string data = helper.Read();
-        lastPacket = data;
+        lastPacket = data.Trim(); // Remove whitespace
         lastDataTime = Time.time;
         packetsReceived++;
         
-        ProcessEnhancedData(data);
+        ProcessESP32Data(lastPacket);
     }
     
-    private void ProcessEnhancedData(string data)
+    private void ProcessESP32Data(string data)
     {
         try
         {
-            // Handle heartbeat
-            if (data.StartsWith("HALIVE"))
+            // Validate packet length - ESP32 sends exactly 30 chars
+            if (string.IsNullOrEmpty(data))
+            {
+                errorPackets++;
+                DebugLog("Empty packet received");
+                return;
+            }
+            
+            // Handle length variations due to network issues
+            if (data.Length < 29 || data.Length > 31)
+            {
+                errorPackets++;
+                DebugLog($"Invalid packet length: '{data}' (len={data.Length}, expected 30)");
+                return;
+            }
+            
+            // Trim to exactly 30 chars if needed
+            if (data.Length > 30)
+            {
+                data = data.Substring(0, 30);
+            }
+            
+            // Basic format validation for ESP32 format: G+012.3X+045.6Y-023.1A+1234C9N
+            if (!data.StartsWith("G") || !data.Contains("X") || !data.Contains("Y") || 
+                !data.Contains("A") || !data.Contains("C") || !data.EndsWith("N"))
+            {
+                errorPackets++;
+                DebugLog($"Invalid packet format: '{data}'");
+                return;
+            }
+            
+            // Extract and parse gyro data
+            if (!ExtractESP32GyroData(data))
+            {
+                errorPackets++;
+                return;
+            }
+            
+            validPackets++;
+            
+            // Detect heartbeat (all values near zero)
+            bool isHeartbeat = (Mathf.Abs(currentGyro.x) < 0.1f && 
+                               Mathf.Abs(currentGyro.y) < 0.1f && 
+                               Mathf.Abs(currentGyro.z) < 0.1f && 
+                               Mathf.Abs(currentAccelY) < 10);
+            
+            if (isHeartbeat)
             {
                 heartbeatPackets++;
-                DebugLog("💓 Heartbeat received");
-                return;
-            }
-            
-            // Validate 30-char format: G+012.3X+045.6Y-023.1A+01234C9N
-            if (data.Length != 30 || !data.StartsWith("G") || !data.EndsWith("N"))
-            {
-                errorPackets++;
-                DebugLog($"Invalid packet format: {data} (len={data.Length})");
-                return;
-            }
-            
-            // Extract gyro data
-            if (!ExtractGyroData(data))
-            {
-                errorPackets++;
-                return;
+                DebugLog("💓 Heartbeat detected");
             }
             
             // Update debug display
             UpdateDebugText($"Gyro X:{currentGyro.x:F1}° Y:{currentGyro.y:F1}° Z:{currentGyro.z:F1}°\n" +
                            $"AccelY:{currentAccelY}\n" +
                            $"Combined:{combinedMovement:F1}°\n" +
-                           $"Packets:{packetsReceived} Errors:{errorPackets}");
+                           $"Packets: ✅{validPackets}/{packetsReceived} ❌{errorPackets} 💓{heartbeatPackets}");
             
         }
         catch (Exception ex)
@@ -311,38 +353,48 @@ public class ESP32GyroController : MonoBehaviour
         }
     }
     
-    private bool ExtractGyroData(string data)
+    private bool ExtractESP32GyroData(string data)
     {
         try
         {
-            // Parse: G+012.3X+045.6Y-023.1A+01234C9N
-            //       0123456789012345678901234567890
+            // Parse ESP32 format: G+012.3X+045.6Y-023.1A+1234C9N
+            //                     0123456789012345678901234567890
             
-            // Extract gyro values
-            string gyroXStr = data.Substring(1, 6);   // +012.3
-            string gyroYStr = data.Substring(8, 6);   // +045.6
-            string gyroZStr = data.Substring(15, 6);  // -023.1
-            string accelYStr = data.Substring(22, 5); // +01234
-            char checksumChar = data[27];             // 9
-            
-            // Parse values
-            float gyroX, gyroY, gyroZ;
-            int accelY;
-            
-            if (!float.TryParse(gyroXStr, out gyroX) ||
-                !float.TryParse(gyroYStr, out gyroY) ||
-                !float.TryParse(gyroZStr, out gyroZ) ||
-                !int.TryParse(accelYStr, out accelY))
+            if (data.Length != 30)
             {
-                DebugLog("Failed to parse numeric values");
+                DebugLog($"Exact length mismatch: {data.Length} != 30");
                 return false;
             }
             
-            // Validate checksum
+            // Extract components with bounds checking
+            string gyroXStr = SafeSubstring(data, 1, 6);   // +012.3
+            string gyroYStr = SafeSubstring(data, 8, 6);   // +045.6
+            string gyroZStr = SafeSubstring(data, 15, 6);  // -023.1
+            string accelYStr = SafeSubstring(data, 22, 5); // +1234
+            char checksumChar = data.Length > 28 ? data[28] : '0';
+            
+            if (string.IsNullOrEmpty(gyroXStr) || string.IsNullOrEmpty(gyroYStr) || 
+                string.IsNullOrEmpty(gyroZStr) || string.IsNullOrEmpty(accelYStr))
+            {
+                DebugLog("Failed to extract data components");
+                return false;
+            }
+            
+            // Parse values with error handling
+            if (!float.TryParse(gyroXStr, out float gyroX) ||
+                !float.TryParse(gyroYStr, out float gyroY) ||
+                !float.TryParse(gyroZStr, out float gyroZ) ||
+                !int.TryParse(accelYStr, out int accelY))
+            {
+                DebugLog($"Parse failed - X:'{gyroXStr}' Y:'{gyroYStr}' Z:'{gyroZStr}' A:'{accelYStr}'");
+                return false;
+            }
+            
+            // Optional checksum validation
             if (!ValidateChecksum(data, checksumChar))
             {
-                DebugLog("Checksum validation failed");
-                return false;
+                DebugLog($"Checksum warning for: '{data}'");
+                // Don't fail - just log warning
             }
             
             // Update current values
@@ -358,18 +410,32 @@ public class ESP32GyroController : MonoBehaviour
         }
     }
     
+    private string SafeSubstring(string str, int startIndex, int length)
+    {
+        if (str == null || startIndex < 0 || startIndex >= str.Length)
+            return "";
+        
+        int actualLength = Mathf.Min(length, str.Length - startIndex);
+        return str.Substring(startIndex, actualLength);
+    }
+    
     private bool ValidateChecksum(string data, char checksumChar)
     {
         try
         {
+            // Calculate checksum for first 27 characters (ESP32 compatible)
             int calculatedSum = 0;
-            for (int i = 0; i < 25; i++)
+            for (int i = 0; i < 27 && i < data.Length; i++)
             {
                 calculatedSum += data[i];
             }
             
             int expectedChecksum = calculatedSum % 10;
-            int receivedChecksum = int.Parse(checksumChar.ToString());
+            
+            if (!int.TryParse(checksumChar.ToString(), out int receivedChecksum))
+            {
+                return false;
+            }
             
             return expectedChecksum == receivedChecksum;
         }
@@ -453,7 +519,7 @@ public class ESP32GyroController : MonoBehaviour
     {
         if (enableDebugLogs)
         {
-            Debug.Log($"[ESP32Multi] {message}");
+            Debug.Log($"[ESP32] {message}");
         }
     }
     
@@ -465,8 +531,10 @@ public class ESP32GyroController : MonoBehaviour
     public float GetCombinedMovement() => combinedMovement;
     public string GetLastPacket() => lastPacket;
     public int GetPacketsReceived() => packetsReceived;
+    public int GetValidPackets() => validPackets;
     public int GetErrorPackets() => errorPackets;
     public int GetHeartbeatPackets() => heartbeatPackets;
+    public float GetValidPacketRatio() => packetsReceived > 0 ? (float)validPackets / packetsReceived : 0f;
     
     // Legacy compatibility (returns Z-axis)
     public float GetGyroValue() => currentGyro.z;
@@ -482,7 +550,43 @@ public class ESP32GyroController : MonoBehaviour
     
     void OnGUI()
     {
+        // Bluetooth helper GUI
         if (bluetoothHelper != null)
             bluetoothHelper.DrawGUI();
+        
+        // Manual connection buttons
+        if (!IsConnected() && GUI.Button(new Rect(10, Screen.height - 60, 120, 25), "Manual Connect"))
+        {
+            connectionRetries = 0;
+            ConnectToDevice();
+        }
+        
+        if (IsConnected() && GUI.Button(new Rect(140, Screen.height - 60, 120, 25), "Disconnect"))
+        {
+            DisconnectBluetooth();
+        }
+        
+        // Enhanced status display
+        if (IsConnected())
+        {
+            string statusColor = IsConnected() ? "🟢" : isConnecting ? "🟡" : "🔴";
+            float validRatio = packetsReceived > 0 ? (float)validPackets / packetsReceived * 100f : 0f;
+            float timeSinceData = Time.time - lastDataTime;
+            
+            GUI.Label(new Rect(10, 10, 400, 20), $"ESP32 Status: {statusColor} Connected");
+            GUI.Label(new Rect(10, 30, 400, 20), $"Packets: ✅{validPackets}/{packetsReceived} ({validRatio:F1}%) | ❌{errorPackets} | 💓{heartbeatPackets}");
+            GUI.Label(new Rect(10, 50, 400, 20), $"Last data: {timeSinceData:F1}s ago");
+            
+            if (validPackets > 0)
+            {
+                GUI.Label(new Rect(10, 70, 400, 20), $"Gyro: X={currentGyro.x:F1}° Y={currentGyro.y:F1}° Z={currentGyro.z:F1}°");
+                GUI.Label(new Rect(10, 90, 400, 20), $"AccelY: {currentAccelY}");
+                GUI.Label(new Rect(10, 110, 300, 20), $"Raw: '{lastPacket}'");
+            }
+        }
+        else
+        {
+            GUI.Label(new Rect(10, 10, 400, 20), $"ESP32 Status: Disconnected (Retry: {connectionRetries}/{maxConnectionRetries})");
+        }
     }
 }
