@@ -13,26 +13,22 @@ public class BoatController : MonoBehaviour
         KeyboardWithDirectControl // Keyboard with direct movement control
     }
 
-    [Header("Input Settings")]
-    [SerializeField] private InputMode inputMode = InputMode.Keyboard;
+    [Header("Input Settings - MANAGED BY CentralInputProcessor")]
+    [SerializeField] private InputMode inputMode = InputMode.BluetoothSensor; // Always use this for external control
     
     [Header("Paddle Logic")]
     [Tooltip("Keyboard: Right tilt = Left paddle (for turning right). Gyro: Right tilt = Right paddle (mirror)")]
     public PaddleLogic paddleLogic = PaddleLogic.Keyboard;
-    [SerializeField] private KeyCode leftPaddleKey = KeyCode.LeftArrow;
-    [SerializeField] private KeyCode rightPaddleKey = KeyCode.RightArrow;
-    [SerializeField] private KeyCode forwardKey = KeyCode.UpArrow;
-    [SerializeField] private KeyCode backwardKey = KeyCode.DownArrow;
     [SerializeField] private float directControlForce = 2.0f;
 
     [Header("Rotation Settings")]
-    [SerializeField] private float turnAngle = 15f;         // Degrees to turn per paddle
-    [SerializeField] private float rotationSpeed = 5f;      // Speed of rotation
-    [SerializeField] private float autoStraightenDelay = 2f; // Time before auto-straighten
-    [SerializeField] private bool enableAutoStraighten = true;
+    [SerializeField] public  float turnAngle = 15f;         // Degrees to turn per paddle
+    [SerializeField] public  float rotationSpeed = 5f;      // Speed of rotation
+    [SerializeField] public  float autoStraightenDelay = 2f; // Time before auto-straighten
+    [SerializeField] public  bool enableAutoStraighten = true;
     [SerializeField] private bool enableSmoothCurve = true;  // Enable smooth curve interpolation
-    [SerializeField] private AnimationCurve turnCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
-    [SerializeField] private Vector3 rotationPivotOffset = Vector3.zero; // Adjust rotation center
+    [SerializeField] public  AnimationCurve turnCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+    [SerializeField] public  Vector3 rotationPivotOffset = Vector3.zero; // Adjust rotation center
 
     [Header("Smooth Rotation")]
     [SerializeField] private bool useSmoothedRotation = true;
@@ -125,7 +121,7 @@ public class BoatController : MonoBehaviour
     private void Start()
     {
         transform.position = new Vector3(0, 0, 0);
-        DebugLog("BoatController Start() called");
+        DebugLog("BoatController Start() called - Input handled by CentralInputProcessor");
         
         // Initialize rotation
         currentRotationY = transform.eulerAngles.y;
@@ -138,8 +134,6 @@ public class BoatController : MonoBehaviour
         suimonoModule = FindObjectOfType<Suimono.Core.SuimonoModule>();
         
         DebugLog($"Components found - Rigidbody: {boatRb != null}, AudioSource: {audioSource != null}, GameManager: {gameManager != null}, Suimono: {suimonoModule != null}");
-        DebugLog($"Input Mode set to: {inputMode}");
-        DebugLog($"Left Paddle Key: {leftPaddleKey}, Right Paddle Key: {rightPaddleKey}");
         
         // Add audio source if missing
         if (audioSource == null)
@@ -171,26 +165,12 @@ public class BoatController : MonoBehaviour
             boatRb.angularVelocity *= (1 - (waterDrag * Time.deltaTime));
         }
 
-        // Handle input based on mode
-        switch (inputMode)
-        {
-            case InputMode.Keyboard:
-                CheckKeyboardInput();
-                break;
-
-            case InputMode.KeyboardWithDirectControl:
-                CheckDirectControlInput();
-                break;
-
-            case InputMode.BluetoothSensor:
-                // Handled by BluetoothReceiver
-                break;
-        }
+        // INPUT PROCESSING REMOVED - NOW HANDLED BY CentralInputProcessor
         
         // Clean up old paddle history
         CleanupPaddleHistory();
         
-        // Update consecutive counts - FIXED
+        // Update consecutive counts
         UpdateConsecutiveCounts();
     }
     
@@ -231,7 +211,7 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // FIXED: Update consecutive counts with timeout
+    // Update consecutive counts with timeout
     private void UpdateConsecutiveCounts()
     {
         // Reset consecutive counts if too much time has passed since last paddle
@@ -246,106 +226,14 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // OnGUI input detection - bypasses Suimono interference
-    private void OnGUI()
-    {
-        Event e = Event.current;
-        if (e.type == EventType.KeyDown)
-        {
-            DebugLog($"OnGUI: Key pressed - {e.keyCode}");
-            
-            if (e.keyCode == leftPaddleKey && canPaddleLeft)
-            {
-                DebugLog("OnGUI: Left paddle triggered");
-                PaddleLeft();
-            }
-            
-            if (e.keyCode == rightPaddleKey && canPaddleRight)
-            {
-                DebugLog("OnGUI: Right paddle triggered");
-                PaddleRight();
-            }
-            
-            // For direct control mode
-            if (inputMode == InputMode.KeyboardWithDirectControl)
-            {
-                if (e.keyCode == forwardKey)
-                {
-                    DebugLog("OnGUI: Forward key triggered");
-                    AddForwardThrust(directControlForce * 0.1f);
-                }
-                
-                if (e.keyCode == backwardKey)
-                {
-                    DebugLog("OnGUI: Backward key triggered");
-                    currentSpeed = Mathf.Max(0, currentSpeed - (directControlForce * 0.1f));
-                }
-            }
-        }
-    }
+    // REMOVED: OnGUI input detection - now handled by CentralInputProcessor
 
-    // Standard keyboard input - using paddle pattern (DISABLED - use OnGUI instead)
-    private void CheckKeyboardInput()
-    {
-        // DISABLED - OnGUI method used instead to bypass Suimono interference
-    }
-
-    // Direct control keyboard input - bypass paddle pattern
-    private void CheckDirectControlInput()
-    {
-        DebugLog("CheckDirectControlInput() called");
-        
-        // Standard paddle inputs
-        if (Input.GetKeyDown(leftPaddleKey) && canPaddleLeft)
-        {
-            DebugLog("Direct Control: Left paddle triggered");
-            PaddleLeft();
-        }
-        
-        if (Input.GetKeyDown(rightPaddleKey) && canPaddleRight)
-        {
-            DebugLog("Direct Control: Right paddle triggered");
-            PaddleRight();
-        }
-        
-        // Direct movement control
-        if (Input.GetKey(forwardKey))
-        {
-            DebugLog("Direct Control: Forward key pressed");
-            AddForwardThrust(directControlForce * Time.deltaTime);
-        }
-        
-        if (Input.GetKey(backwardKey))
-        {
-            DebugLog("Direct Control: Backward key pressed");
-            // Slow down boat
-            currentSpeed = Mathf.Max(0, currentSpeed - (directControlForce * Time.deltaTime * 2));
-        }
-        
-        // Direct turning
-        if (Input.GetKey(leftPaddleKey) && !Input.GetKey(rightPaddleKey))
-        {
-            DebugLog("Direct Control: Left turn");
-            if (boatRb != null)
-            {
-                boatRb.AddTorque(Vector3.up * -turnForce * 0.2f * Time.deltaTime, ForceMode.Acceleration);
-            }
-        }
-        
-        if (Input.GetKey(rightPaddleKey) && !Input.GetKey(leftPaddleKey))
-        {
-            DebugLog("Direct Control: Right turn");
-            if (boatRb != null)
-            {
-                boatRb.AddTorque(Vector3.up * turnForce * 0.2f * Time.deltaTime, ForceMode.Acceleration);
-            }
-        }
-    }
-
-    // Called from BluetoothReceiver when "L:1" is received or from keyboard input
+    // PUBLIC METHODS - Called by CentralInputProcessor
+    
+    // Called from CentralInputProcessor when left paddle is triggered
     public void PaddleLeft()
     {
-        DebugLog("PaddleLeft() called!");
+        DebugLog("PaddleLeft() called by CentralInputProcessor");
         
         if (!canPaddleLeft)
         {
@@ -378,11 +266,10 @@ public class BoatController : MonoBehaviour
         StartCoroutine(LeftPaddleCooldown());
     }
 
-
-    // Called from BluetoothReceiver when "R:1" is received or from keyboard input
+    // Called from CentralInputProcessor when right paddle is triggered
     public void PaddleRight()
     {
-        DebugLog("PaddleRight() called!");
+        DebugLog("PaddleRight() called by CentralInputProcessor");
         
         if (!canPaddleRight)
         {
@@ -415,7 +302,7 @@ public class BoatController : MonoBehaviour
         StartCoroutine(RightPaddleCooldown());
     }
     
-    // FIXED: Record new paddle stroke with real-time consecutive tracking
+    // Record new paddle stroke with real-time consecutive tracking
     private void RecordPaddleStroke(bool isLeftPaddle)
     {
         paddleHistory.Add(new PaddleStroke(isLeftPaddle, Time.time));
@@ -522,8 +409,8 @@ public class BoatController : MonoBehaviour
         }
     }
     
-    // Add forward thrust
-    private void AddForwardThrust(float multiplier = 1.0f)
+    // Add forward thrust - Made public for CentralInputProcessor
+    public void AddForwardThrust(float multiplier = 1.0f)
     {
         float oldSpeed = currentSpeed;
         // Add forward speed
@@ -611,7 +498,6 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    
     // Apply rotation around custom pivot point
     private void ApplyRotationAroundPivot()
     {
@@ -719,7 +605,7 @@ public class BoatController : MonoBehaviour
         DebugLog("Right paddle cooldown ended");
     }
 
-    private void OnCollisionEnter(Collision collision)
+   private void OnCollisionEnter(Collision collision)
     {
         DebugLog($"Collision detected with: {collision.gameObject.name}");
         
@@ -797,11 +683,11 @@ public class BoatController : MonoBehaviour
         }
     }
 
-    // Set input mode
+    // Set input mode - kept for compatibility but input handled by CentralInputProcessor
     public void SetInputMode(InputMode mode)
     {
         inputMode = mode;
-        DebugLog($"Input mode changed to: {mode}");
+        DebugLog($"Input mode changed to: {mode} - (Handled by CentralInputProcessor)");
     }
     
     // Public accessors for external components
@@ -811,7 +697,7 @@ public class BoatController : MonoBehaviour
     public bool IsRightPaddling() { return isRightPaddling; }
     public InputMode GetInputMode() { return inputMode; }
     
-    // FIXED: For debugging and visualization - now uses real-time tracking
+    // For debugging and visualization - now uses real-time tracking
     public int GetConsecutiveLeftCount()
     {
         // Return current consecutive count instead of calculating from history
@@ -842,4 +728,7 @@ public class BoatController : MonoBehaviour
             Debug.Log($"[BoatController] {message}");
         }
     }
+
+    // REMOVED: OnGUI method for input - now handled by CentralInputProcessor
+    // Input processing is centralized in CentralInputProcessor component
 }

@@ -55,6 +55,10 @@ public class PaddleIKController : MonoBehaviour
     public float gyroIdleSmoothing = 5f;
     public Vector3 gyroAxisMapping = new Vector3(0, 0, 1);
     
+    [Header("Auto Straighten (Disabled for Gyro Mode)")]
+    public bool enableAutoStraighten = false; // Default false untuk gyro mode
+    public float autoStraightenDelay = 2f;
+    
     [Header("Debug")]
     public bool enableDebugLogs = true;
     public bool showGizmos = true;
@@ -65,7 +69,7 @@ public class PaddleIKController : MonoBehaviour
     private PaddlePattern previousPattern = PaddlePattern.None;
     private PaddlePattern targetPattern = PaddlePattern.None;
     
-    // Animation state variables
+    // Animation state
     private Vector3 initialRotation;
     private float currentRotationValue;
     private float targetRotationValue;
@@ -73,6 +77,7 @@ public class PaddleIKController : MonoBehaviour
     private float transitionProgress = 1f;
     private float swingTimer;
     private float lastPatternChangeTime;
+    private float lastTurnTime;
     
     // ESP32 & Gyro smoothing
     private float smoothedRawAngle = 0f;
@@ -84,6 +89,13 @@ public class PaddleIKController : MonoBehaviour
     {
         InitializePaddle();
         esp32Controller = FindObjectOfType<ESP32GyroController>();
+        
+        // Auto-disable autoStraighten jika gyro tersedia
+        if (esp32Controller != null && syncIdleWithGyro)
+        {
+            enableAutoStraighten = false;
+            DebugLog("Auto-straighten disabled for gyro mode");
+        }
     }
     
     void Update()
@@ -112,22 +124,29 @@ public class PaddleIKController : MonoBehaviour
         
         if (isIdle && syncIdleWithGyro)
         {
+            // Gyro idle mode - paddle mengikuti gyro langsung
             float targetGyroAngle = esp32Controller.GetSmoothedGyroValue() * idleGyroSensitivity;
             smoothedGyroIdle = Mathf.Lerp(smoothedGyroIdle, targetGyroAngle, 
                                          gyroIdleSmoothing * Time.deltaTime);
             
             targetRotationValue = initialRotation.z + smoothedGyroIdle;
             
-            if (enableDebugLogs && currentPattern != PaddlePattern.GyroIdle)
+            if (currentPattern != PaddlePattern.GyroIdle)
             {
-                Debug.Log("[PaddleController] Switched to Gyro Idle Mode");
-                currentPattern = PaddlePattern.GyroIdle;
+                SetPattern(PaddlePattern.GyroIdle);
+                DebugLog("Switched to Gyro Idle Mode");
             }
         }
         else
         {
+            // Active mode - gunakan raw angle
             UpdateRawAngleSmoothing();
             targetRotationValue = initialRotation.z + smoothedRawAngle;
+            
+            if (currentPattern == PaddlePattern.GyroIdle)
+            {
+                DebugLog("Exited Gyro Idle Mode");
+            }
         }
     }
     
@@ -144,11 +163,18 @@ public class PaddleIKController : MonoBehaviour
     
     private void CheckESP32Control()
     {
+        bool wasESP32Controlled = isESP32Controlled;
         isESP32Controlled = (esp32Controller != null && esp32Controller.IsConnected());
         
         if (isESP32Controlled && overrideWithRawAngle)
         {
             useRawAngle = true;
+        }
+        
+        // Log perubahan status
+        if (wasESP32Controlled != isESP32Controlled)
+        {
+            DebugLog($"ESP32 control: {(isESP32Controlled ? "Connected" : "Disconnected")}");
         }
     }
     
@@ -185,7 +211,13 @@ public class PaddleIKController : MonoBehaviour
     
     private void DetectPaddlePattern()
     {
-        if (boatController == null || isESP32Controlled) return;
+        if (boatController == null) return;
+        
+        // Jangan ubah pattern jika sedang dalam GyroIdle dan ESP32 aktif
+        if (currentPattern == PaddlePattern.GyroIdle && isESP32Controlled && syncIdleWithGyro)
+        {
+            return;
+        }
         
         int leftCount = boatController.GetConsecutiveLeftCount();
         int rightCount = boatController.GetConsecutiveRightCount();
@@ -195,18 +227,14 @@ public class PaddleIKController : MonoBehaviour
         
         if (newPattern != targetPattern && Time.time - lastPatternChangeTime > patternChangeDelay)
         {
-            previousPattern = currentPattern;
-            targetPattern = newPattern;
-            lastPatternChangeTime = Time.time;
-            previousRotationValue = currentRotationValue;
-            transitionProgress = 0f;
-            
+            SetPattern(newPattern);
             LogPatternChange(newPattern, leftCount, rightCount);
         }
     }
     
     private PaddlePattern DeterminePattern(int leftCount, int rightCount, float currentSpeed)
     {
+        // Prioritas: Consecutive > Alternating > None
         if (leftCount >= minConsecutivePaddles)
             return PaddlePattern.ConsecutiveLeft;
         
@@ -216,11 +244,25 @@ public class PaddleIKController : MonoBehaviour
         if (currentSpeed > speedThreshold)
             return PaddlePattern.Alternating;
         
+        // Jika dalam ESP32 mode dan idle, pertahankan GyroIdle
+        if (isESP32Controlled && syncIdleWithGyro && IsBoatIdle())
+            return PaddlePattern.GyroIdle;
+        
         return PaddlePattern.None;
+    }
+    
+    private void SetPattern(PaddlePattern newPattern)
+    {
+        previousPattern = currentPattern;
+        targetPattern = newPattern;
+        lastPatternChangeTime = Time.time;
+        previousRotationValue = currentRotationValue;
+        transitionProgress = 0f;
     }
     
     private void AnimatePaddle()
     {
+        // Update transition progress
         if (transitionProgress < 1f)
         {
             transitionProgress += Time.deltaTime / patternBlendDuration;
@@ -234,24 +276,10 @@ public class PaddleIKController : MonoBehaviour
         
         swingTimer += Time.deltaTime * swingSpeed;
         
-        float patternRotation;
+        // Calculate target rotation based on pattern
+        float patternRotation = CalculatePatternRotation();
         
-        switch (targetPattern)
-        {
-            case PaddlePattern.Alternating:
-                patternRotation = CalculateAlternatingRotation();
-                break;
-            case PaddlePattern.ConsecutiveLeft:
-                patternRotation = CalculateLeftTurnRotation();
-                break;
-            case PaddlePattern.ConsecutiveRight:
-                patternRotation = CalculateRightTurnRotation();
-                break;
-            default:
-                patternRotation = initialRotation.z;
-                break;
-        }
-        
+        // Apply transition blending
         if (transitionProgress < 1f)
         {
             float t = transitionCurve.Evaluate(transitionProgress);
@@ -260,6 +288,33 @@ public class PaddleIKController : MonoBehaviour
         else
         {
             targetRotationValue = patternRotation;
+        }
+    }
+    
+    private float CalculatePatternRotation()
+    {
+        switch (targetPattern)
+        {
+            case PaddlePattern.Alternating:
+                return CalculateAlternatingRotation();
+            
+            case PaddlePattern.ConsecutiveLeft:
+                return CalculateLeftTurnRotation();
+            
+            case PaddlePattern.ConsecutiveRight:
+                return CalculateRightTurnRotation();
+            
+            case PaddlePattern.GyroIdle:
+                // Gyro idle - gunakan smoothed gyro value
+                return initialRotation.z + smoothedGyroIdle;
+            
+            default: // None
+                // Jika dalam ESP32 mode dan idle, gunakan gyro
+                if (isESP32Controlled && syncIdleWithGyro && IsBoatIdle())
+                {
+                    return initialRotation.z + smoothedGyroIdle;
+                }
+                return initialRotation.z; // Default netral
         }
     }
     
@@ -292,6 +347,21 @@ public class PaddleIKController : MonoBehaviour
     private void ApplyRotation()
     {
         if (paddle == null || character == null) return;
+        
+        // Smooth rotation dengan check auto-straighten
+        bool shouldAutoStraighten = enableAutoStraighten && 
+                                   !isESP32Controlled && 
+                                   currentPattern != PaddlePattern.GyroIdle &&
+                                   Time.time - lastTurnTime > autoStraightenDelay;
+        
+        if (shouldAutoStraighten)
+        {
+            // Apply auto-straighten force
+            float currentY = currentRotationValue;
+            if (currentY > 180f) currentY -= 360f;
+            float straightenForce = -currentY * 0.5f * Time.deltaTime;
+            targetRotationValue += straightenForce;
+        }
         
         currentRotationValue = Mathf.LerpAngle(currentRotationValue, targetRotationValue, rotationSpeed * Time.deltaTime);
         
@@ -347,9 +417,9 @@ public class PaddleIKController : MonoBehaviour
             if (useRawAngle && isESP32Controlled)
             {
                 Gizmos.color = currentPattern == PaddlePattern.GyroIdle ? Color.cyan : Color.green;
-                Vector3 rawDir = Quaternion.Euler(0, character.eulerAngles.y, 
+                Vector3 direction = Quaternion.Euler(0, character.eulerAngles.y, 
                     currentPattern == PaddlePattern.GyroIdle ? smoothedGyroIdle : smoothedRawAngle) * Vector3.forward;
-                Gizmos.DrawRay(paddle.position, rawDir * 0.5f);
+                Gizmos.DrawRay(paddle.position, direction * 0.5f);
             }
         }
     }
@@ -366,7 +436,7 @@ public class PaddleIKController : MonoBehaviour
         }
     }
     
-    // Public methods
+    // Public API
     public PaddlePattern GetCurrentPattern() => currentPattern;
     public float GetTransitionProgress() => transitionProgress;
     public bool IsAnimating() => currentPattern != PaddlePattern.None;
@@ -393,10 +463,7 @@ public class PaddleIKController : MonoBehaviour
         
         if (patternIndex >= 0 && patternIndex < System.Enum.GetValues(typeof(PaddlePattern)).Length)
         {
-            previousPattern = currentPattern;
-            targetPattern = (PaddlePattern)patternIndex;
-            transitionProgress = 0f;
-            previousRotationValue = currentRotationValue;
+            SetPattern((PaddlePattern)patternIndex);
             DebugLog($"Force pattern to: {GetPatternName(targetPattern)}");
         }
     }
@@ -405,5 +472,18 @@ public class PaddleIKController : MonoBehaviour
     {
         syncIdleWithGyro = enabled;
         DebugLog($"Gyro idle sync: {(enabled ? "enabled" : "disabled")}");
+    }
+    
+    public void SetAutoStraighten(bool enabled)
+    {
+        // Disable auto-straighten jika ESP32 aktif dan gyro sync enabled
+        if (enabled && isESP32Controlled && syncIdleWithGyro)
+        {
+            DebugLog("Auto-straighten disabled - ESP32 gyro mode active");
+            return;
+        }
+        
+        enableAutoStraighten = enabled;
+        DebugLog($"Auto-straighten: {(enabled ? "enabled" : "disabled")}");
     }
 }
