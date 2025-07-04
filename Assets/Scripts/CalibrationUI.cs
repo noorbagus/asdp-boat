@@ -1,46 +1,67 @@
 using UnityEngine;
+using System.Collections;
 
 public class CalibrationUI : MonoBehaviour
 {
     [Header("UI Settings")]
-    public bool showCalibrationUI = true;
-    public Color backgroundColor = new Color(0, 0, 0, 0.8f);
-    public Color progressBarColor = Color.green;
-    public Color textColor = Color.white;
+    [SerializeField] private bool enableCalibrationUI = true;
+    [SerializeField] private float readyDisplayTime = 2f;
     
-    private GyroIntegratedController gyroController;
+    [Header("Styling")]
+    [SerializeField] private Color backgroundColor = new Color(0.05f, 0.05f, 0.1f, 0.95f);
+    [SerializeField] private Color accentColor = new Color(0.2f, 0.8f, 1f, 1f);
+    [SerializeField] private Color progressColor = new Color(0.3f, 0.9f, 0.4f, 1f);
+    [SerializeField] private Color textColor = Color.white;
+    
+    private GravityCalibrator calibrator;
+    private bool isVisible = false;
+    private float fadeAlpha = 0f;
+    
+    // UI Styles
     private GUIStyle titleStyle;
-    private GUIStyle subtitleStyle;
+    private GUIStyle instructionStyle;
+    private GUIStyle progressStyle;
     private Texture2D backgroundTexture;
     private Texture2D progressTexture;
+    private Texture2D progressBgTexture;
     
-    void Start()
+    private void Start()
     {
-        gyroController = FindObjectOfType<GyroIntegratedController>();
+        calibrator = FindObjectOfType<GravityCalibrator>();
         SetupStyles();
+        SetupEventListeners();
     }
     
-    void SetupStyles()
+    private void SetupStyles()
     {
-        // Title style
+        // Title style - large, bold
         titleStyle = new GUIStyle();
-        titleStyle.fontSize = 32;
+        titleStyle.fontSize = Mathf.RoundToInt(Screen.height * 0.06f);
         titleStyle.fontStyle = FontStyle.Bold;
         titleStyle.alignment = TextAnchor.MiddleCenter;
         titleStyle.normal.textColor = textColor;
         
-        // Subtitle style
-        subtitleStyle = new GUIStyle();
-        subtitleStyle.fontSize = 18;
-        subtitleStyle.alignment = TextAnchor.MiddleCenter;
-        subtitleStyle.normal.textColor = textColor;
+        // Instruction style - medium, clean
+        instructionStyle = new GUIStyle();
+        instructionStyle.fontSize = Mathf.RoundToInt(Screen.height * 0.035f);
+        instructionStyle.alignment = TextAnchor.MiddleCenter;
+        instructionStyle.normal.textColor = new Color(0.9f, 0.9f, 0.9f, 0.9f);
+        instructionStyle.wordWrap = true;
         
-        // Textures
+        // Progress text style
+        progressStyle = new GUIStyle();
+        progressStyle.fontSize = Mathf.RoundToInt(Screen.height * 0.04f);
+        progressStyle.fontStyle = FontStyle.Bold;
+        progressStyle.alignment = TextAnchor.MiddleCenter;
+        progressStyle.normal.textColor = accentColor;
+        
+        // Create textures
         backgroundTexture = CreateTexture(backgroundColor);
-        progressTexture = CreateTexture(progressBarColor);
+        progressTexture = CreateTexture(progressColor);
+        progressBgTexture = CreateTexture(new Color(0.2f, 0.2f, 0.3f, 0.8f));
     }
     
-    Texture2D CreateTexture(Color color)
+    private Texture2D CreateTexture(Color color)
     {
         Texture2D texture = new Texture2D(1, 1);
         texture.SetPixel(0, 0, color);
@@ -48,106 +69,163 @@ public class CalibrationUI : MonoBehaviour
         return texture;
     }
     
-    void OnGUI()
+    private void SetupEventListeners()
     {
-        if (!showCalibrationUI || gyroController == null) return;
-        
-        if (gyroController.IsCalibrating())
+        if (calibrator != null)
         {
-            DrawCalibrationOverlay();
-        }
-        else if (!gyroController.IsCalibrated())
-        {
-            DrawNotCalibratedOverlay();
+            calibrator.OnCalibrationStateChanged += OnCalibrationStateChanged;
+            calibrator.OnCalibrationComplete += OnCalibrationComplete;
         }
     }
     
-    void DrawCalibrationOverlay()
+    private void OnCalibrationStateChanged(bool isCalibrating)
     {
-        // Full screen overlay
+        if (isCalibrating)
+        {
+            ShowCalibrationUI();
+        }
+    }
+    
+    private void OnCalibrationComplete(Vector3 offset)
+    {
+        StartCoroutine(ShowCompletionAndHide());
+    }
+    
+    private IEnumerator ShowCompletionAndHide()
+    {
+        yield return new WaitForSeconds(readyDisplayTime);
+        HideCalibrationUI();
+    }
+    
+    public void ShowCalibrationUI()
+    {
+        isVisible = true;
+        fadeAlpha = 1f;
+    }
+    
+    public void HideCalibrationUI()
+    {
+        isVisible = false;
+        fadeAlpha = 0f;
+    }
+    
+    private void OnGUI()
+    {
+        if (!enableCalibrationUI || !isVisible || calibrator == null) return;
+        
+        // Full screen background
+        GUI.color = new Color(1f, 1f, 1f, fadeAlpha);
         GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), backgroundTexture);
         
+        // Calculate responsive dimensions
         float centerX = Screen.width * 0.5f;
         float centerY = Screen.height * 0.5f;
+        float cardWidth = Mathf.Min(Screen.width * 0.7f, 800f);
+        float cardHeight = Screen.height * 0.4f;
+        
+        // Main card background with rounded effect (fake with multiple rects)
+        Rect cardRect = new Rect(centerX - cardWidth * 0.5f, centerY - cardHeight * 0.5f, cardWidth, cardHeight);
+        GUI.color = new Color(1f, 1f, 1f, fadeAlpha * 0.9f);
+        
+        // Draw card shadow
+        GUI.DrawTexture(new Rect(cardRect.x + 8, cardRect.y + 8, cardRect.width, cardRect.height), 
+                       CreateTexture(new Color(0, 0, 0, 0.3f)));
+        
+        // Draw main card
+        GUI.DrawTexture(cardRect, CreateTexture(new Color(0.1f, 0.1f, 0.15f, 0.95f)));
         
         // Title
-        GUI.Label(new Rect(centerX - 200, centerY - 100, 400, 50), 
-                  "CALIBRATING GYRO", titleStyle);
+        GUI.color = new Color(1f, 1f, 1f, fadeAlpha);
+        float titleY = cardRect.y + cardHeight * 0.15f;
+        GUI.Label(new Rect(cardRect.x, titleY, cardWidth, titleStyle.fontSize + 10), 
+                  calibrator.IsCalibrated() ? "Calibration Complete!" : "Calibrating Paddle", titleStyle);
         
-        // Instruction
-        GUI.Label(new Rect(centerX - 200, centerY - 40, 400, 30), 
-                  "Hold paddle steady and level", subtitleStyle);
+        // Icon/Status indicator
+        float iconSize = Screen.height * 0.08f;
+        Rect iconRect = new Rect(centerX - iconSize * 0.5f, titleY + titleStyle.fontSize + 20, iconSize, iconSize);
         
-        // Progress bar background
-        float barWidth = 400;
-        float barHeight = 20;
-        float barX = centerX - barWidth * 0.5f;
-        float barY = centerY + 20;
-        
-        GUI.color = Color.gray;
-        GUI.DrawTexture(new Rect(barX, barY, barWidth, barHeight), backgroundTexture);
-        
-        // Progress bar fill
-        float progress = GetCalibrationProgress();
-        GUI.color = progressBarColor;
-        GUI.DrawTexture(new Rect(barX, barY, barWidth * progress, barHeight), progressTexture);
-        
-        // Progress text
-        GUI.color = textColor;
-        GUI.Label(new Rect(centerX - 100, centerY + 60, 200, 30), 
-                  $"{progress * 100:F0}%", subtitleStyle);
-        
-        // Sample count
-        GUI.Label(new Rect(centerX - 150, centerY + 90, 300, 25), 
-                  $"Samples: {GetCalibrationSamples()}", subtitleStyle);
-        
-        GUI.color = Color.white;
-    }
-    
-    void DrawNotCalibratedOverlay()
-    {
-        // Semi-transparent overlay
-        GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), backgroundTexture);
-        
-        float centerX = Screen.width * 0.5f;
-        float centerY = Screen.height * 0.5f;
-        
-        // Warning
-        GUI.color = Color.red;
-        GUI.Label(new Rect(centerX - 200, centerY - 60, 400, 50), 
-                  "GYRO NOT CALIBRATED", titleStyle);
-        
-        GUI.color = textColor;
-        GUI.Label(new Rect(centerX - 200, centerY - 10, 400, 30), 
-                  "Press CALIBRATE to start", subtitleStyle);
-        
-        // Calibrate button
-        if (GUI.Button(new Rect(centerX - 75, centerY + 30, 150, 40), "CALIBRATE"))
+        if (calibrator.IsCalibrated())
         {
-            gyroController.StartCalibration();
+            // Checkmark circle
+            GUI.color = new Color(progressColor.r, progressColor.g, progressColor.b, fadeAlpha);
+            GUI.DrawTexture(iconRect, CreateTexture(progressColor));
+            GUI.color = new Color(1f, 1f, 1f, fadeAlpha);
+            GUI.Label(iconRect, "✓", new GUIStyle { fontSize = Mathf.RoundToInt(iconSize * 0.6f), 
+                     alignment = TextAnchor.MiddleCenter, normal = { textColor = Color.white } });
+        }
+        else
+        {
+            // Spinning loading circle (fake animation with time-based rotation)
+            Matrix4x4 matrixBackup = GUI.matrix;
+            GUIUtility.RotateAroundPivot(Time.time * 90f, iconRect.center);
+            GUI.color = new Color(accentColor.r, accentColor.g, accentColor.b, fadeAlpha);
+            GUI.DrawTexture(iconRect, CreateTexture(accentColor));
+            GUI.matrix = matrixBackup;
+        }
+        
+        // Instruction text
+        GUI.color = new Color(1f, 1f, 1f, fadeAlpha * 0.8f);
+        float instrY = iconRect.y + iconSize + 30;
+        string instruction = calibrator.IsCalibrated() ? "Ready to play!" : "Hold paddle flat and still";
+        GUI.Label(new Rect(cardRect.x + 20, instrY, cardWidth - 40, instructionStyle.fontSize + 10), 
+                  instruction, instructionStyle);
+        
+        // Progress bar (only during calibration)
+        if (!calibrator.IsCalibrated())
+        {
+            float progress = calibrator.GetCalibrationProgress();
+            float barWidth = cardWidth * 0.8f;
+            float barHeight = 12f;
+            float barX = centerX - barWidth * 0.5f;
+            float barY = instrY + instructionStyle.fontSize + 40;
+            
+            // Progress bar background
+            GUI.color = new Color(1f, 1f, 1f, fadeAlpha * 0.3f);
+            GUI.DrawTexture(new Rect(barX, barY, barWidth, barHeight), progressBgTexture);
+            
+            // Progress bar fill with glow effect
+            GUI.color = new Color(progressColor.r, progressColor.g, progressColor.b, fadeAlpha);
+            float fillWidth = barWidth * progress;
+            GUI.DrawTexture(new Rect(barX, barY, fillWidth, barHeight), progressTexture);
+            
+            // Progress glow
+            if (progress > 0)
+            {
+                GUI.color = new Color(progressColor.r, progressColor.g, progressColor.b, fadeAlpha * 0.3f);
+                GUI.DrawTexture(new Rect(barX, barY - 2, fillWidth, barHeight + 4), progressTexture);
+            }
+            
+            // Progress text
+            GUI.color = new Color(1f, 1f, 1f, fadeAlpha);
+            string progressText = $"{calibrator.GetCurrentSampleCount()} / {calibrator.GetRequiredSamples()}";
+            GUI.Label(new Rect(cardRect.x, barY + barHeight + 15, cardWidth, progressStyle.fontSize + 5), 
+                     progressText, progressStyle);
+            
+            // Status text
+            GUI.color = new Color(1f, 1f, 1f, fadeAlpha * 0.7f);
+            string status = "Keep the paddle steady to collect samples";
+            GUIStyle statusStyle = new GUIStyle(instructionStyle);
+            statusStyle.fontSize = Mathf.RoundToInt(Screen.height * 0.025f);
+            GUI.Label(new Rect(cardRect.x + 20, barY + barHeight + 45, cardWidth - 40, statusStyle.fontSize + 5), 
+                     status, statusStyle);
         }
         
         GUI.color = Color.white;
     }
     
-    float GetCalibrationProgress()
+    public bool IsVisible() => isVisible;
+    
+    private void OnDestroy()
     {
-        if (gyroController == null) return 0f;
+        if (calibrator != null)
+        {
+            calibrator.OnCalibrationStateChanged -= OnCalibrationStateChanged;
+            calibrator.OnCalibrationComplete -= OnCalibrationComplete;
+        }
         
-        // Calculate based on remaining time
-        float elapsed = gyroController.calibrationDuration - gyroController.GetCalibrationTimer();
-        return Mathf.Clamp01(elapsed / gyroController.calibrationDuration);
-    }
-    
-    int GetCalibrationSamples()
-    {
-        if (gyroController == null) return 0;
-        return gyroController.GetCalibrationSampleCount();
-    }
-    
-    void OnDestroy()
-    {
-        if (backgroundTexture != null) Destroy(backgroundTexture);
-        if (progressTexture != null) Destroy(progressTexture);
+        // Cleanup textures
+        if (backgroundTexture != null) DestroyImmediate(backgroundTexture);
+        if (progressTexture != null) DestroyImmediate(progressTexture);
+        if (progressBgTexture != null) DestroyImmediate(progressBgTexture);
     }
 }
