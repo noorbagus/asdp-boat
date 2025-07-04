@@ -1,326 +1,315 @@
 using UnityEngine;
-using System.Collections;
 
 public class StreamlinedInputManager : MonoBehaviour
 {
-    [Header("Component References")]
-    [SerializeField] private BluetoothManager bluetoothManager;
-    [SerializeField] private GravityCalibrator calibrator;
-    [SerializeField] private SimpleGyroDetector gyroDetector;
-    [SerializeField] private GestureDetector gestureDetector;
-    [SerializeField] private CalibrationUI calibrationUI;
+    [Header("Bluetooth Connection")]
+    public BluetoothManager bluetoothManager;
+    public GravityCalibrator gravityCalibrator;
+    
+    [Header("Gyro Detection Systems")]
+    public PeakDetectionGyro peakDetector;
+    public SimpleGyroDetector simpleDetector;
+    [SerializeField] private bool usePeakDetection = true;
     
     [Header("Game Controllers")]
-    [SerializeField] private BoatController boatController;
-    [SerializeField] private PaddleIKController paddleController;
+    public BoatController boatController;
+    public PaddleIKController paddleIKController;
     
-    [Header("Auto Start")]
-    [SerializeField] private bool autoStartCalibration = true;
-    [SerializeField] private float startDelay = 1f;
+    [Header("Gesture Detection")]
+    public GestureDetector gestureDetector;
     
     [Header("Debug")]
-    [SerializeField] private bool enableDebugLogs = true;
+    public bool enableDebugLogs = true;
     
-    // State tracking
-    private bool isSystemReady = false;
-    private bool isCalibrationComplete = false;
-    private SimpleGyroDetector.BoatState lastBoatState = SimpleGyroDetector.BoatState.Idle;
+    // Connection state
+    private bool isBluetoothConnected = false;
+    private bool isCalibrated = false;
     
-    private void Start()
+    void Start()
     {
-        DebugLog("StreamlinedInputManager initializing...");
-        
         InitializeComponents();
-        SetupEventListeners();
+        RegisterEventHandlers();
         
-        if (autoStartCalibration)
+        DebugLog("StreamlinedInputManager started with dual detection system");
+    }
+    
+    void InitializeComponents()
+    {
+        // Auto-find components if not assigned
+        if (bluetoothManager == null)
+            bluetoothManager = FindObjectOfType<BluetoothManager>();
+        if (gravityCalibrator == null)
+            gravityCalibrator = FindObjectOfType<GravityCalibrator>();
+        if (boatController == null)
+            boatController = FindObjectOfType<BoatController>();
+        if (paddleIKController == null)
+            paddleIKController = FindObjectOfType<PaddleIKController>();
+        if (gestureDetector == null)
+            gestureDetector = FindObjectOfType<GestureDetector>();
+        
+        // Configure detection systems
+        ConfigureDetectionSystems();
+    }
+    
+    void ConfigureDetectionSystems()
+    {
+        if (usePeakDetection && peakDetector != null)
         {
-            StartCoroutine(StartCalibrationAfterDelay());
+            DebugLog("Configuring PEAK DETECTION mode");
+            
+            // Peak detection handles boat control
+            peakDetector.OnPaddleDetected += HandlePeakPaddleDetected;
+            
+            // Simple detector only for visual/analysis (no boat control)
+            if (simpleDetector != null)
+            {
+                simpleDetector.enableBoatControl = false;
+                simpleDetector.OnTurnDetected += HandleVisualTurn; // Visual feedback only
+            }
+        }
+        else if (simpleDetector != null)
+        {
+            DebugLog("Configuring SIMPLE DETECTION mode");
+            
+            // Simple detector handles boat control
+            simpleDetector.enableBoatControl = true;
+            simpleDetector.OnTurnDetected += HandleSimpleTurn;
         }
     }
     
-    private void InitializeComponents()
+    void RegisterEventHandlers()
     {
-        // Auto-find components if not assigned
-        if (bluetoothManager == null) bluetoothManager = FindObjectOfType<BluetoothManager>();
-        if (calibrator == null) calibrator = FindObjectOfType<GravityCalibrator>();
-        if (gyroDetector == null) gyroDetector = FindObjectOfType<SimpleGyroDetector>();
-        if (gestureDetector == null) gestureDetector = FindObjectOfType<GestureDetector>();
-        if (calibrationUI == null) calibrationUI = FindObjectOfType<CalibrationUI>();
-        if (boatController == null) boatController = FindObjectOfType<BoatController>();
-        if (paddleController == null) paddleController = FindObjectOfType<PaddleIKController>();
-        
-        DebugLog($"Components found - Bluetooth:{bluetoothManager != null}, Calibrator:{calibrator != null}, " +
-                $"Detector:{gyroDetector != null}, UI:{calibrationUI != null}, Boat:{boatController != null}");
-    }
-    
-    private void SetupEventListeners()
-    {
-        // BluetoothManager events
+        // Bluetooth events
         if (bluetoothManager != null)
         {
             bluetoothManager.OnGyroDataReceived += OnBluetoothGyroReceived;
             bluetoothManager.OnConnectionChanged += OnBluetoothConnectionChanged;
         }
         
-        // Calibrator events
-        if (calibrator != null)
+        // Calibration events
+        if (gravityCalibrator != null)
         {
-            calibrator.OnCalibrationComplete += OnCalibrationComplete;
+            // Check if calibration events exist, otherwise monitor IsCalibrated()
+            DebugLog("Gravity calibrator found - monitoring calibration status");
         }
         
-        // Gyro detector events
-        if (gyroDetector != null)
-        {
-            gyroDetector.OnStateChanged += OnBoatStateChanged;
-        }
-        
-        // Gesture detector events
+        // Gesture events
         if (gestureDetector != null)
         {
-            gestureDetector.OnGestureDetected += OnGestureDetected;
+            gestureDetector.OnGestureDetected += HandleGestureDetected;
         }
     }
     
-    private IEnumerator StartCalibrationAfterDelay()
+    void OnBluetoothGyroReceived(Vector3 gyroData)
     {
-        yield return new WaitForSeconds(startDelay);
+        // Check calibration status
+        if (gravityCalibrator != null && !gravityCalibrator.IsCalibrated())
+        {
+            isCalibrated = false;
+            return;
+        }
         
-        if (calibrator != null && !calibrator.IsCalibrated())
+        isCalibrated = true;
+        
+        // Apply calibration if available
+        Vector3 calibratedGyro = gyroData;
+        if (gravityCalibrator != null && gravityCalibrator.IsCalibrated())
         {
-            DebugLog("Auto-starting calibration");
-            calibrator.StartCalibration();
+            // Use the actual method name from your GravityCalibrator
+            Vector3 offset = gravityCalibrator.GetGyroOffset();
+            calibratedGyro = gyroData - offset;
         }
-    }
-    
-    private void OnBluetoothGyroReceived(Vector3 filteredVelocity)
-    {
-        // Get raw gyro angles from BluetoothManager
-        if (bluetoothManager != null && calibrator != null)
+        
+        // Feed to detection systems based on mode
+        if (usePeakDetection && peakDetector != null)
         {
-            Vector3 rawGyro = bluetoothManager.GetGyroAngles();
+            // Primary: Peak detection for boat control
+            peakDetector.ProcessGyroAngle(calibratedGyro.x);
             
-            // Pass raw gyro to calibrator
-            calibrator.ProcessGyroData(rawGyro);
-            
-            // If calibrated, pass calibrated data to detector
-            if (calibrator.IsCalibrated() && gyroDetector != null)
+            // Secondary: Simple detector for visual only
+            if (simpleDetector != null)
             {
-                Vector3 calibratedGyro = calibrator.GetCalibratedGyro();
-                gyroDetector.ProcessCalibratedGyro(calibratedGyro);
-                
-                // Update paddle visual with Z-axis
-                if (paddleController != null)
-                {
-                    paddleController.SetRawAngle(-calibratedGyro.z); // Negate for correct direction
-                }
-            }
-            
-            // Pass accelerometer Y to gesture detector
-            if (gestureDetector != null)
-            {
-                Vector3Int rawAccel = bluetoothManager.GetRawAccel();
-                gestureDetector.ProcessAccelData(rawAccel.y);
+                simpleDetector.ProcessCalibratedGyro(calibratedGyro);
             }
         }
-    }
-    
-    private void OnBluetoothConnectionChanged(bool connected)
-    {
-        DebugLog($"Bluetooth connection: {(connected ? "Connected" : "Disconnected")}");
-        
-        if (!connected)
+        else if (simpleDetector != null)
         {
-            isSystemReady = false;
+            // Fallback: Simple detection for everything
+            simpleDetector.ProcessCalibratedGyro(calibratedGyro);
+        }
+        
+        // Visual feedback always active
+        UpdatePaddleVisual(calibratedGyro.x);
+        
+        // Gesture detection
+        if (gestureDetector != null)
+        {
+            gestureDetector.ProcessAccelData(gyroData); // Assuming gesture uses accel
         }
     }
     
-    private void OnCalibrationComplete(Vector3 offset)
+    void HandlePeakPaddleDetected(string direction)
     {
-        isCalibrationComplete = true;
-        isSystemReady = true;
+        DebugLog($"🏓 PEAK paddle: {direction}");
         
-        DebugLog($"Calibration complete - Static offset: {offset}");
-        DebugLog("System ready for input processing");
-    }
-    
-    private void OnBoatStateChanged(SimpleGyroDetector.BoatState newState, float confidence)
-    {
-        if (!isSystemReady) return;
-        
-        lastBoatState = newState;
-        
-        DebugLog($"Boat state: {newState} (confidence: {confidence:F2})");
-        
-        // Route to boat controller
+        // Trigger boat movement
         if (boatController != null)
         {
-            switch (newState)
-            {
-                case SimpleGyroDetector.BoatState.Forward:
-                    boatController.AddForwardThrust(confidence);
-                    break;
-                    
-                case SimpleGyroDetector.BoatState.TurnLeft:
-                    boatController.PaddleRight(); // Right paddle for left turn
-                    break;
-                    
-                case SimpleGyroDetector.BoatState.TurnRight:
-                    boatController.PaddleLeft(); // Left paddle for right turn
-                    break;
-                    
-                case SimpleGyroDetector.BoatState.Idle:
-                    // No action needed for idle
-                    break;
-            }
+            if (direction == "LEFT")
+                boatController.PaddleLeft();
+            else if (direction == "RIGHT")
+                boatController.PaddleRight();
+        }
+        
+        // Update paddle visual
+        if (paddleIKController != null)
+        {
+            float angle = direction == "LEFT" ? 30f : -30f;
+            paddleIKController.SetRawAngle(angle);
         }
     }
     
-    private void OnGestureDetected(string gestureType)
+    void HandleSimpleTurn(string direction)
     {
-        DebugLog($"Gesture detected: {gestureType}");
+        DebugLog($"🚤 SIMPLE turn: {direction}");
+        
+        // Trigger boat movement (when simple detection is primary)
+        if (!usePeakDetection && boatController != null)
+        {
+            if (direction == "LEFT")
+                boatController.PaddleLeft();
+            else if (direction == "RIGHT")
+                boatController.PaddleRight();
+        }
+    }
+    
+    void HandleVisualTurn(string direction)
+    {
+        // Only visual feedback when peak detection is primary
+        DebugLog($"👁️ VISUAL turn: {direction}");
+        
+        if (paddleIKController != null)
+        {
+            float angle = direction == "LEFT" ? 20f : -20f;
+            paddleIKController.SetRawAngle(angle);
+        }
+    }
+    
+    void UpdatePaddleVisual(float gyroAngle)
+    {
+        if (paddleIKController != null)
+        {
+            // Continuous visual update based on gyro angle
+            paddleIKController.SetRawAngle(-gyroAngle); // Negate for correct direction
+        }
+    }
+    
+    void HandleGestureDetected(string gestureType)
+    {
+        DebugLog($"✋ Gesture: {gestureType}");
         
         switch (gestureType)
         {
             case "RESTART_GAME":
-                RestartGame();
+                // Handle restart gesture
+                GameManager gameManager = FindObjectOfType<GameManager>();
+                if (gameManager != null)
+                {
+                    gameManager.RestartLevel();
+                }
                 break;
                 
-            default:
-                DebugLog($"Unknown gesture: {gestureType}");
+            case "START_GAME":
+                // Handle start gesture
                 break;
         }
     }
     
-    private void RestartGame()
+    void OnBluetoothConnectionChanged(bool connected)
     {
-        DebugLog("Restarting game via gesture");
+        isBluetoothConnected = connected;
+        DebugLog($"Bluetooth: {(connected ? "Connected" : "Disconnected")}");
         
-        GameManager gameManager = GameManager.Instance;
-        if (gameManager != null)
+        if (!connected)
         {
-            gameManager.RestartLevel();
+            isCalibrated = false;
         }
+    }
+    
+    void OnCalibrationCompleted(Vector3 offset)
+    {
+        isCalibrated = true;
+        DebugLog($"Calibration completed: {offset}");
+    }
+    
+    // Public API for runtime switching
+    public void SwitchToDetectionMode(bool usePeak)
+    {
+        usePeakDetection = usePeak;
+        ConfigureDetectionSystems();
+        DebugLog($"Switched to {(usePeak ? "PEAK" : "SIMPLE")} detection");
+    }
+    
+    public bool IsConnected() => isBluetoothConnected;
+    public bool IsCalibrated() => isCalibrated;
+    public bool IsUsingPeakDetection() => usePeakDetection;
+    
+    // Manual trigger for testing
+    public void TestLeftPaddle()
+    {
+        if (usePeakDetection)
+            HandlePeakPaddleDetected("LEFT");
         else
-        {
-            // Fallback to scene reload
-            UnityEngine.SceneManagement.SceneManager.LoadScene(
-                UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex);
-        }
+            HandleSimpleTurn("LEFT");
     }
     
-    // Public API
-    public bool IsSystemReady() => isSystemReady;
-    public bool IsCalibrationComplete() => isCalibrationComplete;
-    public SimpleGyroDetector.BoatState GetCurrentBoatState() => lastBoatState;
-    
-    public void StartCalibration()
+    public void TestRightPaddle()
     {
-        if (calibrator != null)
-        {
-            DebugLog("Manual calibration start");
-            calibrator.StartCalibration();
-        }
+        if (usePeakDetection)
+            HandlePeakPaddleDetected("RIGHT");
+        else
+            HandleSimpleTurn("RIGHT");
     }
     
-    public void ResetSystem()
-    {
-        DebugLog("Resetting system for new session");
-        
-        isSystemReady = false;
-        isCalibrationComplete = false;
-        lastBoatState = SimpleGyroDetector.BoatState.Idle;
-        
-        if (calibrator != null)
-        {
-            calibrator.ResetCalibration();
-        }
-        
-        if (autoStartCalibration)
-        {
-            StartCoroutine(StartCalibrationAfterDelay());
-        }
-    }
-    
-    // Force states for testing
-    public void ForceBoatState(int stateIndex)
-    {
-        if (gyroDetector != null && stateIndex >= 0 && stateIndex < 4)
-        {
-            SimpleGyroDetector.BoatState state = (SimpleGyroDetector.BoatState)stateIndex;
-            gyroDetector.ForceState(state);
-            DebugLog($"Forced boat state to: {state}");
-        }
-    }
-    
-    private void DebugLog(string message)
+    void DebugLog(string message)
     {
         if (enableDebugLogs)
         {
-            Debug.Log($"[StreamlinedInputManager] {message}");
+            Debug.Log($"[StreamlinedInput] {message}");
         }
     }
     
-    private void OnDestroy()
-    {
-        // Cleanup event listeners
-        if (bluetoothManager != null)
-        {
-            bluetoothManager.OnGyroDataReceived -= OnBluetoothGyroReceived;
-            bluetoothManager.OnConnectionChanged -= OnBluetoothConnectionChanged;
-        }
-        
-        if (calibrator != null)
-        {
-            calibrator.OnCalibrationComplete -= OnCalibrationComplete;
-        }
-        
-        if (gyroDetector != null)
-        {
-            gyroDetector.OnStateChanged -= OnBoatStateChanged;
-        }
-        
-        if (gestureDetector != null)
-        {
-            gestureDetector.OnGestureDetected -= OnGestureDetected;
-        }
-    }
-    
-    // Debug GUI
     void OnGUI()
     {
         if (!enableDebugLogs) return;
         
-        GUILayout.BeginArea(new Rect(10, 670, 350, 150));
-        GUILayout.Box("Streamlined Input Manager");
+        GUILayout.BeginArea(new Rect(10, Screen.height - 150, 350, 150));
         
-        // System status
-        GUI.color = isSystemReady ? Color.green : Color.red;
-        GUILayout.Label($"System: {(isSystemReady ? "READY" : "NOT READY")}");
+        // Connection status
+        GUI.color = isBluetoothConnected ? Color.green : Color.red;
+        GUILayout.Label($"Bluetooth: {(isBluetoothConnected ? "✓ Connected" : "✗ Disconnected")}");
+        
+        // Calibration status
+        GUI.color = isCalibrated ? Color.green : Color.yellow;
+        GUILayout.Label($"Calibration: {(isCalibrated ? "✓ Ready" : "⚠ Waiting")}");
+        
         GUI.color = Color.white;
         
-        GUILayout.Label($"Calibration: {(isCalibrationComplete ? "✓" : "✗")}");
-        GUILayout.Label($"Boat State: {lastBoatState}");
+        // Detection mode
+        GUI.color = usePeakDetection ? Color.cyan : Color.white;
+        GUILayout.Label($"Detection: {(usePeakDetection ? "PEAK" : "SIMPLE")}");
+        GUI.color = Color.white;
         
-        // Manual controls
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Start Cal") && calibrator != null)
+        // Toggle button
+        if (GUILayout.Button("Switch Detection Mode"))
         {
-            calibrator.StartCalibration();
+            SwitchToDetectionMode(!usePeakDetection);
         }
-        if (GUILayout.Button("Reset"))
-        {
-            ResetSystem();
-        }
-        GUILayout.EndHorizontal();
         
-        // Force state buttons
-        GUILayout.Label("Force States:");
+        // Test buttons
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Idle")) ForceBoatState(0);
-        if (GUILayout.Button("Fwd")) ForceBoatState(1);
-        if (GUILayout.Button("L")) ForceBoatState(2);
-        if (GUILayout.Button("R")) ForceBoatState(3);
+        if (GUILayout.Button("Test L")) TestLeftPaddle();
+        if (GUILayout.Button("Test R")) TestRightPaddle();
         GUILayout.EndHorizontal();
         
         GUILayout.EndArea();

@@ -4,11 +4,9 @@ using System.Collections.Generic;
 public class SimpleGyroDetector : MonoBehaviour
 {
     [Header("Detection Thresholds")]
-    [SerializeField] private float turnThreshold = 10f; // degrees for turn detection
-    [SerializeField] private float turnStabilityTime = 2f; // seconds of stability required
-    [SerializeField] private float forwardSwingThreshold = 15f; // degrees for forward detection
+    [SerializeField] private float turnThreshold = 8f; // degrees for instant turn
+    [SerializeField] private float forwardSwingThreshold = 12f; // degrees for forward detection
     [SerializeField] private float forwardTimeWindow = 1.5f; // seconds for alternating pattern
-    [SerializeField] private float deadZone = 5f; // degrees - idle threshold
     
     [Header("Smoothing")]
     [SerializeField] private float smoothingFactor = 0.3f;
@@ -21,17 +19,11 @@ public class SimpleGyroDetector : MonoBehaviour
     
     // Current state
     private BoatState currentState = BoatState.Idle;
-    private BoatState previousState = BoatState.Idle;
-    private float stateConfidence = 0f;
+    private float stateConfidence = 1f;
     
     // Gyro data
     private Vector3 currentGyro = Vector3.zero;
     private Vector3 smoothedGyro = Vector3.zero;
-    
-    // Turn stability tracking
-    private float turnAngleStartTime = 0f;
-    private bool isInTurnAngle = false;
-    private float currentTurnAngle = 0f;
     
     // Forward pattern tracking
     private List<SwingEvent> swingHistory = new List<SwingEvent>();
@@ -42,7 +34,7 @@ public class SimpleGyroDetector : MonoBehaviour
     private struct SwingEvent
     {
         public float timestamp;
-        public bool isLeftSwing; // true = left, false = right
+        public bool isLeftSwing;
         public float intensity;
         
         public SwingEvent(float time, bool left, float intensity)
@@ -55,12 +47,9 @@ public class SimpleGyroDetector : MonoBehaviour
     
     private void Start()
     {
-        DebugLog("SimpleGyroDetector initialized - Fixed offset, 2s stability");
+        DebugLog("SimpleGyroDetector initialized - Simple instant detection");
     }
     
-    /// <summary>
-    /// Process calibrated gyro data and detect patterns
-    /// </summary>
     public void ProcessCalibratedGyro(Vector3 calibratedGyro)
     {
         currentGyro = calibratedGyro;
@@ -93,79 +82,44 @@ public class SimpleGyroDetector : MonoBehaviour
     
     private BoatState DetectMovementPattern(float gyroX)
     {
+        DebugLog($"Gyro: {gyroX:F1}°");
+        
+        // Simple instant tilt detection
+        if (gyroX > turnThreshold) 
+        {
+            DebugLog($"LEFT turn: {gyroX:F1}° > {turnThreshold}°");
+            return BoatState.TurnLeft;
+        }
+        
+        if (gyroX < -turnThreshold) 
+        {
+            DebugLog($"RIGHT turn: {gyroX:F1}° < -{turnThreshold}°");
+            return BoatState.TurnRight;
+        }
+        
+        // Forward alternating pattern
         float absGyroX = Mathf.Abs(gyroX);
-        
-        // Check dead zone first (idle)
-        if (absGyroX < deadZone)
-        {
-            // Reset turn tracking when in dead zone
-            isInTurnAngle = false;
-            return BoatState.Idle;
-        }
-        
-        // Check for turn patterns (require 2-second stability)
-        if (absGyroX > turnThreshold)
-        {
-            // Determine turn direction
-            bool isTurningLeft = gyroX > 0;
-            
-            // Track stability time
-            if (!isInTurnAngle || Mathf.Sign(currentTurnAngle) != Mathf.Sign(gyroX))
-            {
-                // Started new turn angle or changed direction
-                isInTurnAngle = true;
-                currentTurnAngle = gyroX;
-                turnAngleStartTime = Time.time;
-                
-                DebugLog($"Turn angle started: {gyroX:F1}° at time {Time.time:F2}");
-            }
-            else
-            {
-                // Continue tracking current turn angle
-                currentTurnAngle = gyroX;
-                
-                // Check if we've been stable long enough
-                float stableTime = Time.time - turnAngleStartTime;
-                if (stableTime >= turnStabilityTime)
-                {
-                    DebugLog($"Turn confirmed after {stableTime:F1}s stability");
-                    return isTurningLeft ? BoatState.TurnLeft : BoatState.TurnRight;
-                }
-            }
-            
-            // Not stable long enough yet - stay in current state or go idle
-            return currentState == BoatState.TurnLeft || currentState == BoatState.TurnRight ? 
-                   currentState : BoatState.Idle;
-        }
-        else
-        {
-            // Not in turn threshold - reset turn tracking
-            isInTurnAngle = false;
-        }
-        
-        // Check for forward pattern (alternating swings)
         if (absGyroX > forwardSwingThreshold)
         {
             RecordSwingEvent(gyroX);
             
             if (IsAlternatingPattern())
             {
+                DebugLog($"FORWARD: alternating pattern detected");
                 return BoatState.Forward;
             }
         }
         
-        // Default to current state or idle
-        return currentState == BoatState.Forward ? BoatState.Forward : BoatState.Idle;
+        return BoatState.Idle;
     }
     
     private void RecordSwingEvent(float gyroX)
     {
         bool isLeftSwing = gyroX > 0;
         float intensity = Mathf.Abs(gyroX) / forwardSwingThreshold;
-        
         swingHistory.Add(new SwingEvent(Time.time, isLeftSwing, intensity));
         
-        DebugLog($"Swing recorded: {(isLeftSwing ? "LEFT" : "RIGHT")} intensity: {intensity:F2}");
+        DebugLog($"Swing: {(isLeftSwing ? "LEFT" : "RIGHT")} {intensity:F2}");
     }
     
     private bool IsAlternatingPattern()
@@ -182,32 +136,22 @@ public class SimpleGyroDetector : MonoBehaviour
             {
                 recentSwings.Add(swingHistory[i]);
             }
-            else
-            {
-                break; // History is sorted by time
-            }
+            else break;
         }
         
-        // Need at least 2 swings for alternating pattern
         if (recentSwings.Count < 2) return false;
         
-        // Check if swings alternate (left-right-left or right-left-right)
-        bool isAlternating = true;
+        // Check alternating pattern
         for (int i = 0; i < recentSwings.Count - 1; i++)
         {
             if (recentSwings[i].isLeftSwing == recentSwings[i + 1].isLeftSwing)
             {
-                isAlternating = false;
-                break;
+                return false;
             }
         }
         
-        if (isAlternating)
-        {
-            DebugLog($"Alternating pattern detected with {recentSwings.Count} swings");
-        }
-        
-        return isAlternating;
+        DebugLog($"Alternating pattern: {recentSwings.Count} swings");
+        return true;
     }
     
     private void CleanupSwingHistory()
@@ -218,55 +162,24 @@ public class SimpleGyroDetector : MonoBehaviour
     
     private void UpdateState(BoatState newState)
     {
-        previousState = currentState;
+        BoatState previousState = currentState;
         currentState = newState;
         
-        // Calculate confidence based on state
-        stateConfidence = CalculateStateConfidence();
-        
-        DebugLog($"State: {previousState} → {currentState} (confidence: {stateConfidence:F2})");
-        
-        // Notify listeners
+        DebugLog($"State: {previousState} → {currentState}");
         OnStateChanged?.Invoke(currentState, stateConfidence);
     }
     
-    private float CalculateStateConfidence()
-    {
-        switch (currentState)
-        {
-            case BoatState.TurnLeft:
-            case BoatState.TurnRight:
-                // High confidence for sustained turns
-                float stableTime = Time.time - turnAngleStartTime;
-                return Mathf.Clamp01(stableTime / turnStabilityTime);
-                
-            case BoatState.Forward:
-                // Confidence based on swing consistency
-                return swingHistory.Count > 0 ? 
-                       Mathf.Clamp01(swingHistory.Count / 4f) : 0.5f;
-                
-            case BoatState.Idle:
-                return 1.0f;
-                
-            default:
-                return 0.5f;
-        }
-    }
-    
-    // Public getters
+    // Public API
     public BoatState GetCurrentState() => currentState;
     public float GetStateConfidence() => stateConfidence;
     public Vector3 GetCurrentGyro() => currentGyro;
     public Vector3 GetSmoothedGyro() => smoothedGyro;
-    public bool IsInTurnAngle() => isInTurnAngle;
-    public float GetTurnStabilityTime() => isInTurnAngle ? Time.time - turnAngleStartTime : 0f;
     public int GetSwingHistoryCount() => swingHistory.Count;
     
-    // Force state for testing
     public void ForceState(BoatState state)
     {
         UpdateState(state);
-        DebugLog($"State forced to: {state}");
+        DebugLog($"Forced: {state}");
     }
     
     private void DebugLog(string message)
@@ -282,38 +195,20 @@ public class SimpleGyroDetector : MonoBehaviour
     {
         if (!enableDebugLogs) return;
         
-        GUILayout.BeginArea(new Rect(10, 460, 350, 200));
+        GUILayout.BeginArea(new Rect(10, 460, 300, 150));
         GUILayout.Box("Simple Gyro Detector");
         
-        // Current state
+        // State
         GUI.color = GetStateColor(currentState);
-        GUILayout.Label($"State: {currentState} ({stateConfidence:F2})");
+        GUILayout.Label($"State: {currentState}");
         GUI.color = Color.white;
         
-        // Gyro data
-        GUILayout.Label($"Raw Gyro: {currentGyro}");
-        GUILayout.Label($"Smoothed: {smoothedGyro}");
-        GUILayout.Label($"GyroX: {smoothedGyro.x:F1}° (deadzone: ±{deadZone}°)");
-        
-        // Turn tracking
-        if (isInTurnAngle)
-        {
-            float stability = GetTurnStabilityTime();
-            GUI.color = stability >= turnStabilityTime ? Color.green : Color.yellow;
-            GUILayout.Label($"Turn stability: {stability:F1}s / {turnStabilityTime}s");
-            GUI.color = Color.white;
-        }
-        
-        // Forward tracking
-        if (swingHistory.Count > 0)
-        {
-            GUILayout.Label($"Swings: {swingHistory.Count} (window: {forwardTimeWindow}s)");
-        }
-        
-        // Thresholds
+        // Data
+        GUILayout.Label($"GyroX: {smoothedGyro.x:F1}°");
         GUILayout.Label($"Turn: ±{turnThreshold}° | Forward: ±{forwardSwingThreshold}°");
+        GUILayout.Label($"Swings: {swingHistory.Count}");
         
-        // Force state buttons
+        // Force buttons
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("Idle")) ForceState(BoatState.Idle);
         if (GUILayout.Button("Forward")) ForceState(BoatState.Forward);
@@ -331,8 +226,7 @@ public class SimpleGyroDetector : MonoBehaviour
             case BoatState.Forward: return Color.green;
             case BoatState.TurnLeft: return Color.red;
             case BoatState.TurnRight: return Color.blue;
-            case BoatState.Idle: return Color.gray;
-            default: return Color.white;
+            default: return Color.gray;
         }
     }
 }
