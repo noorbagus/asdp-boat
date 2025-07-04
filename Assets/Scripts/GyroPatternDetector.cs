@@ -18,14 +18,20 @@ public class GyroPatternDetector : MonoBehaviour
     public float gyroZThreshold = 5f;
     public float totalMovementThreshold = 25f;
     
+    [Header("Idle Detection")]
+    public float idleMovementTolerance = 8f;    // Toleransi getaran saat idle
+    public float idleAngleTolerance = 3f;       // Toleransi sudut saat miring
+    
     [Header("Gesture Detection")]
-    public float startGameAccelY = 2000f;
-    public float restartGameAccelY = -2000f;
-    public float gestureTimeout = 1f;
+    public float startGameAccelY = 8000f;    // Fixed threshold
+    public float restartGameAccelY = -8000f; // Fixed threshold
+    public float gestureTimeout = 2f;        // Increased timeout
     
     [Header("Debug")]
     public bool enableDebugLogs = true;
     public bool showPatternHistory = true;
+    public bool showAngleDebug = true;
+    public bool showHorizontalReference = true;
     
     // Pattern state
     private MovementPattern currentPattern = MovementPattern.Idle;
@@ -53,33 +59,44 @@ public class GyroPatternDetector : MonoBehaviour
     private float lastGestureTime = 0f;
     private bool gestureProcessed = false;
     
+    // Angle debug
+    private float currentHorizontalAngle = 0f;
+    private float smoothedHorizontalAngle = 0f;
+    private float lastAngleLogTime = 0f;
+    private Vector3 lastGyroForAngle = Vector3.zero;
+    
     private struct MovementEvent
     {
         public bool isLeftMovement;
         public float timestamp;
         public Vector3 gyroData;
         public float intensity;
+        public float horizontalAngle;
         
-        public MovementEvent(bool left, float time, Vector3 gyro, float intensity)
+        public MovementEvent(bool left, float time, Vector3 gyro, float intensity, float angle)
         {
             isLeftMovement = left;
             timestamp = time;
             gyroData = gyro;
             this.intensity = intensity;
+            horizontalAngle = angle;
         }
     }
     
     void Start()
     {
-        DebugLog("GyroPatternDetector initialized");
+        DebugLog("GyroPatternDetector initialized with angle debug");
         lastMovementTime = Time.time;
     }
     
     void Update()
     {
         CleanupHistory();
-        // UpdatePatternDetection();
         UpdateConsecutiveTracking();
+        
+        // Update angle debug continuously
+        if (showAngleDebug)
+            UpdateAngleDebug();
     }
     
     public void UpdateGyroData(Vector3 gyroData, int accelY)
@@ -87,6 +104,10 @@ public class GyroPatternDetector : MonoBehaviour
         currentGyro = gyroData;
         currentAccelY = accelY;
         combinedMovement = CalculateCombinedMovement(gyroData);
+        
+        // Update angle debug
+        if (showAngleDebug)
+            UpdateAngleDebug();
         
         // Check for gestures first
         if (CheckForGestures())
@@ -96,6 +117,30 @@ public class GyroPatternDetector : MonoBehaviour
         
         // Process movement patterns
         ProcessMovementData();
+    }
+    
+    private void UpdateAngleDebug()
+    {
+        // Calculate angle from horizontal (0° = flat paddle)
+        // Using Z and Y for paddle orientation relative to horizontal
+        currentHorizontalAngle = Mathf.Atan2(currentGyro.y, Mathf.Abs(currentGyro.z)) * Mathf.Rad2Deg;
+        
+        // For paddle tilt: positive = paddle tip up, negative = paddle tip down
+        if (currentGyro.z < 0) currentHorizontalAngle = -currentHorizontalAngle;
+        
+        // Smooth the angle for better display
+        smoothedHorizontalAngle = Mathf.LerpAngle(smoothedHorizontalAngle, currentHorizontalAngle, 
+                                                Time.deltaTime * 8f);
+        
+        // Log significant angle changes (throttled)
+        if (Time.time - lastAngleLogTime > 0.5f && 
+            Vector3.Distance(currentGyro, lastGyroForAngle) > 5f)
+        {
+            DebugLog($"Paddle angle: {smoothedHorizontalAngle:F1}° from horizontal | " +
+                    $"Raw: X={currentGyro.x:F1}° Y={currentGyro.y:F1}° Z={currentGyro.z:F1}°");
+            lastAngleLogTime = Time.time;
+            lastGyroForAngle = currentGyro;
+        }
     }
     
     private float CalculateCombinedMovement(Vector3 gyro)
@@ -117,7 +162,7 @@ public class GyroPatternDetector : MonoBehaviour
             BroadcastGesture("START_GAME");
             lastGestureTime = Time.time;
             gestureProcessed = true;
-            DebugLog($"START GAME gesture detected: {currentAccelY}");
+            DebugLog($"START GAME gesture detected: {currentAccelY} (angle: {smoothedHorizontalAngle:F1}°)");
             return true;
         }
         
@@ -128,7 +173,7 @@ public class GyroPatternDetector : MonoBehaviour
             BroadcastGesture("RESTART_GAME");
             lastGestureTime = Time.time;
             gestureProcessed = true;
-            DebugLog($"RESTART GAME gesture detected: {currentAccelY}");
+            DebugLog($"RESTART GAME gesture detected: {currentAccelY} (angle: {smoothedHorizontalAngle:F1}°)");
             return true;
         }
         
@@ -148,7 +193,7 @@ public class GyroPatternDetector : MonoBehaviour
             // Determine movement direction
             bool isLeftMovement = DetermineMovementDirection();
             
-            // Record movement event
+            // Record movement event with angle
             RecordMovementEvent(isLeftMovement);
             
             // Analyze pattern
@@ -161,10 +206,21 @@ public class GyroPatternDetector : MonoBehaviour
             wasOverThreshold = false;
         }
         
-        // Check for idle state
+        // Enhanced idle detection with tolerance
         if (Time.time - lastMovementTime > idleTimeout)
         {
-            SetPattern(MovementPattern.Idle, 1.0f);
+            // Check if current movement is within idle tolerance
+            bool isWithinIdleTolerance = combinedMovement < idleMovementTolerance;
+            
+            // Additional check for stable angle (not changing rapidly)
+            bool isAngleStable = movementHistory.Count == 0 || 
+                               (movementHistory.Count > 0 && 
+                                Mathf.Abs(smoothedHorizontalAngle - movementHistory.Last().horizontalAngle) < idleAngleTolerance);
+            
+            if (isWithinIdleTolerance && isAngleStable)
+            {
+                SetPattern(MovementPattern.Idle, 1.0f);
+            }
         }
     }
     
@@ -189,7 +245,8 @@ public class GyroPatternDetector : MonoBehaviour
     private void RecordMovementEvent(bool isLeftMovement)
     {
         float intensity = combinedMovement / totalMovementThreshold;
-        movementHistory.Add(new MovementEvent(isLeftMovement, Time.time, currentGyro, intensity));
+        movementHistory.Add(new MovementEvent(isLeftMovement, Time.time, currentGyro, 
+                                            intensity, smoothedHorizontalAngle));
         
         // Update consecutive tracking
         if (isLeftMovement)
@@ -223,9 +280,9 @@ public class GyroPatternDetector : MonoBehaviour
         
         lastStrokeTime = Time.time;
         
-        DebugLog($"Movement recorded: {(isLeftMovement ? "LEFT" : "RIGHT")} " +
-                $"Consecutive L:{consecutiveLeft} R:{consecutiveRight} " +
-                $"Intensity:{intensity:F2}");
+        DebugLog($"Movement: {(isLeftMovement ? "LEFT" : "RIGHT")} | " +
+                $"Consecutive L:{consecutiveLeft} R:{consecutiveRight} | " +
+                $"Intensity:{intensity:F2} | Angle:{smoothedHorizontalAngle:F1}°");
     }
     
     private void AnalyzeMovementPattern()
@@ -320,8 +377,8 @@ public class GyroPatternDetector : MonoBehaviour
             
             BroadcastPatternChange();
             
-            DebugLog($"Pattern changed: {previousPattern} → {currentPattern} " +
-                    $"(confidence: {confidence:F2})");
+            DebugLog($"Pattern: {previousPattern} → {currentPattern} " +
+                    $"(confidence: {confidence:F2}, angle: {smoothedHorizontalAngle:F1}°)");
         }
         else
         {
@@ -394,6 +451,8 @@ public class GyroPatternDetector : MonoBehaviour
     public int GetConsecutiveRight() => consecutiveRight;
     public float GetCombinedMovement() => combinedMovement;
     public int GetMovementHistoryCount() => movementHistory.Count;
+    public float GetCurrentHorizontalAngle() => currentHorizontalAngle;
+    public float GetSmoothedHorizontalAngle() => smoothedHorizontalAngle;
     
     // Force pattern for testing
     public void ForcePattern(MovementPattern pattern)
@@ -410,6 +469,8 @@ public class GyroPatternDetector : MonoBehaviour
         consecutiveRight = 0;
         currentPattern = MovementPattern.Idle;
         patternConfidence = 0f;
+        currentHorizontalAngle = 0f;
+        smoothedHorizontalAngle = 0f;
         DebugLog("Pattern detection reset");
     }
     
@@ -417,10 +478,65 @@ public class GyroPatternDetector : MonoBehaviour
     {
         if (!showPatternHistory || !enableDebugLogs) return;
         
-        GUILayout.BeginArea(new Rect(10, 200, 300, 200));
+        GUILayout.BeginArea(new Rect(10, 200, 400, 300));
+        
+        // Pattern info
         GUILayout.Label($"Pattern: {currentPattern} ({patternConfidence:F2})");
         GUILayout.Label($"Consecutive L:{consecutiveLeft} R:{consecutiveRight}");
-        GUILayout.Label($"Combined Movement: {combinedMovement:F1}");
+        GUILayout.Label($"Combined Movement: {combinedMovement:F1}°");
+        
+        // Angle debug section
+        if (showAngleDebug)
+        {
+            GUILayout.Space(10);
+            GUILayout.Label("=== ANGLE DEBUG ===");
+            GUILayout.Label($"Horizontal Angle: {smoothedHorizontalAngle:F1}°");
+            GUILayout.Label($"Raw: X={currentGyro.x:F1}° Y={currentGyro.y:F1}° Z={currentGyro.z:F1}°");
+            
+            // Threshold status with colors
+            GUI.color = Mathf.Abs(currentGyro.x) > gyroXThreshold ? Color.red : Color.white;
+            GUILayout.Label($"X: {currentGyro.x:F1}° (thr: {gyroXThreshold}°)");
+            
+            GUI.color = Mathf.Abs(currentGyro.y) > gyroYThreshold ? Color.red : Color.white;
+            GUILayout.Label($"Y: {currentGyro.y:F1}° (thr: {gyroYThreshold}°)");
+            
+            GUI.color = Mathf.Abs(currentGyro.z) > gyroZThreshold ? Color.red : Color.white;
+            GUILayout.Label($"Z: {currentGyro.z:F1}° (thr: {gyroZThreshold}°)");
+            
+            GUI.color = Color.white;
+            
+            // Direction indicator
+            string direction = "";
+            if (Mathf.Abs(currentGyro.z) > gyroZThreshold)
+                direction = currentGyro.z < 0 ? "← LEFT" : "RIGHT →";
+            else if (Mathf.Abs(currentGyro.x) > gyroXThreshold)
+                direction = currentGyro.x < 0 ? "← LEFT" : "RIGHT →";
+                
+            if (!string.IsNullOrEmpty(direction))
+            {
+                GUI.color = Color.yellow;
+                GUILayout.Label($"Direction: {direction}");
+                GUI.color = Color.white;
+            }
+            
+            // Accelerometer for gestures
+            GUILayout.Space(5);
+            GUI.color = currentAccelY > startGameAccelY ? Color.green : 
+                       currentAccelY < restartGameAccelY ? Color.red : Color.white;
+            GUILayout.Label($"AccelY: {currentAccelY} (Start: {startGameAccelY}, Restart: {restartGameAccelY})");
+            GUI.color = Color.white;
+            
+            // Idle detection status
+            GUILayout.Space(5);
+            bool isIdleTolerant = combinedMovement < idleMovementTolerance;
+            GUI.color = isIdleTolerant ? Color.green : Color.white;
+            GUILayout.Label($"Idle Movement: {combinedMovement:F1}° (tolerance: {idleMovementTolerance}°)");
+            
+            GUI.color = Color.white;
+            float timeSinceMove = Time.time - lastMovementTime;
+            GUILayout.Label($"Time since movement: {timeSinceMove:F1}s (idle at: {idleTimeout}s)");
+        }
+        
         GUILayout.Label($"History Count: {movementHistory.Count}");
         GUILayout.EndArea();
     }
