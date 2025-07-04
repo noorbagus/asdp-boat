@@ -1,23 +1,12 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 using ArduinoBluetoothAPI;
 
 public class BluetoothManager : MonoBehaviour
 {
-    [Header("Device Settings")]
-    [Tooltip("List of ESP32 device names to try connecting to")]
-    public List<string> deviceNames = new List<string> 
-    { 
-        "ferizy-paddle", 
-        "ferizy-paddle-2" 
-    };
-    
     [Header("Connection Settings")]
+    public string deviceName = "ferizy-paddle"; // Name of the Bluetooth device
     public bool autoConnect = true;
-    public bool autoSwitchOnDisconnect = true;
-    public float reconnectDelay = 2f;
-    public int maxReconnectAttempts = 3;
     public bool enableDebugLogs = false;
     
     [Header("Data Scaling")]
@@ -35,13 +24,15 @@ public class BluetoothManager : MonoBehaviour
     [Tooltip("Expected end character for data packets")]
     public string packetEndChar = "N";
     
+    [Header("Multiple Device Support")]
+    [Tooltip("List of device names to try connecting to")]
+    public string[] deviceNames = { "ferizy-paddle", "ferizy-dayung", "bluetooth-paddle" };
+    
     // Bluetooth
     private BluetoothHelper bluetoothHelper;
     private bool isConnected = false;
     private int currentDeviceIndex = 0;
     private string connectedDeviceName = "";
-    private int reconnectAttempts = 0;
-    private bool isReconnecting = false;
     
     // Data tracking
     private string lastRawPacket = "";
@@ -59,33 +50,26 @@ public class BluetoothManager : MonoBehaviour
     // Events
     public System.Action<Vector3> OnGyroDataReceived;
     public System.Action<bool> OnConnectionChanged;
-    public System.Action<string> OnDeviceChanged;
     
     void Start()
     {
-        if (deviceNames.Count == 0)
+        // Initialize with first device in list if available
+        if (deviceNames.Length > 0)
         {
-            deviceNames.Add("ferizy-paddle");
-            Debug.LogWarning("[Bluetooth] No device names configured, using default");
+            deviceName = deviceNames[0];
         }
         
+        InitializeBluetooth();
         if (autoConnect)
         {
-            Invoke("ConnectToNextDevice", 1f);
+            Invoke("Connect", 1f);
         }
     }
     
-    void InitializeBluetooth(string deviceName)
+    void InitializeBluetooth()
     {
         try
         {
-            // Clean up existing connection
-            if (bluetoothHelper != null)
-            {
-                bluetoothHelper.Disconnect();
-                bluetoothHelper = null;
-            }
-            
             bluetoothHelper = BluetoothHelper.GetInstance(deviceName);
             bluetoothHelper.OnConnected += OnConnected;
             bluetoothHelper.OnConnectionFailed += OnConnectionFailed;
@@ -93,48 +77,51 @@ public class BluetoothManager : MonoBehaviour
             bluetoothHelper.setTerminatorBasedStream("\n");
             
             if (enableDebugLogs)
-                Debug.Log($"[Bluetooth] Initialized for device: {deviceName}");
+                Debug.Log("[Bluetooth] Initialized");
         }
         catch (Exception ex)
         {
-            Debug.LogError($"[Bluetooth] Init failed for {deviceName}: {ex.Message}");
+            Debug.LogError($"[Bluetooth] Init failed: {ex.Message}");
         }
     }
     
-    public void ConnectToNextDevice()
+    public void Connect()
     {
-        if (deviceNames.Count == 0) return;
-        
-        string deviceName = deviceNames[currentDeviceIndex];
-        ConnectToDevice(deviceName);
-    }
-    
-    public void ConnectToDevice(string deviceName)
-    {
-        if (isReconnecting) return;
-        
-        if (enableDebugLogs)
-            Debug.Log($"[Bluetooth] Attempting to connect to: {deviceName}");
-        
-        InitializeBluetooth(deviceName);
-        
         if (bluetoothHelper != null && !bluetoothHelper.isConnected())
         {
             bluetoothHelper.Connect();
         }
     }
     
-    public void TryNextDevice()
+    public void ConnectToNextDevice()
     {
-        if (isReconnecting) return;
+        if (deviceNames.Length == 0)
+        {
+            Connect();
+            return;
+        }
         
-        currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.Count;
-        reconnectAttempts = 0;
+        // Try next device in the list
+        currentDeviceIndex = (currentDeviceIndex + 1) % deviceNames.Length;
+        deviceName = deviceNames[currentDeviceIndex];
         
         if (enableDebugLogs)
-            Debug.Log($"[Bluetooth] Trying next device: {deviceNames[currentDeviceIndex]}");
+            Debug.Log($"[Bluetooth] Trying device: {deviceName}");
         
-        Invoke("ConnectToNextDevice", 1f);
+        // Disconnect current if connected
+        if (isConnected)
+        {
+            Disconnect();
+        }
+        
+        // Reinitialize with new device
+        InitializeBluetooth();
+        Connect();
+    }
+    
+    public void TryNextDevice()
+    {
+        ConnectToNextDevice();
     }
     
     public void Disconnect()
@@ -151,62 +138,20 @@ public class BluetoothManager : MonoBehaviour
     void OnConnected(BluetoothHelper helper)
     {
         isConnected = true;
-        connectedDeviceName = deviceNames[currentDeviceIndex];
-        reconnectAttempts = 0;
-        isReconnecting = false;
-        
+        connectedDeviceName = deviceName;
         helper.StartListening();
         OnConnectionChanged?.Invoke(true);
-        OnDeviceChanged?.Invoke(connectedDeviceName);
         
         if (enableDebugLogs)
-            Debug.Log($"[Bluetooth] ✓ Connected to: {connectedDeviceName}");
+            Debug.Log($"[Bluetooth] ✓ Connected to {deviceName}");
     }
     
     void OnConnectionFailed(BluetoothHelper helper)
     {
         isConnected = false;
+        connectedDeviceName = "";
         OnConnectionChanged?.Invoke(false);
-        
-        if (enableDebugLogs)
-            Debug.Log($"[Bluetooth] ✗ Connection failed to: {deviceNames[currentDeviceIndex]}");
-        
-        // Try reconnecting or switch device
-        if (autoSwitchOnDisconnect)
-        {
-            HandleConnectionFailure();
-        }
-    }
-    
-    void HandleConnectionFailure()
-    {
-        if (isReconnecting) return;
-        
-        reconnectAttempts++;
-        
-        if (reconnectAttempts >= maxReconnectAttempts)
-        {
-            // Switch to next device
-            if (enableDebugLogs)
-                Debug.Log($"[Bluetooth] Max reconnect attempts reached, switching device");
-            
-            TryNextDevice();
-        }
-        else
-        {
-            // Retry current device
-            if (enableDebugLogs)
-                Debug.Log($"[Bluetooth] Reconnect attempt {reconnectAttempts}/{maxReconnectAttempts}");
-            
-            isReconnecting = true;
-            Invoke("RetryConnection", reconnectDelay);
-        }
-    }
-    
-    void RetryConnection()
-    {
-        isReconnecting = false;
-        ConnectToNextDevice();
+        Debug.LogError($"[Bluetooth] ✗ Connection failed to {deviceName}");
     }
     
     void OnDataReceived(BluetoothHelper helper)
@@ -233,12 +178,6 @@ public class BluetoothManager : MonoBehaviour
         {
             Debug.LogError($"[Bluetooth] Data error: {ex.Message}");
             errorPackets++;
-            
-            // Check if connection is still alive
-            if (!bluetoothHelper.isConnected() && autoSwitchOnDisconnect)
-            {
-                HandleConnectionFailure();
-            }
         }
     }
     
@@ -249,13 +188,17 @@ public class BluetoothManager : MonoBehaviour
         
         try
         {
-            // Remove R and N characters: R+2695,+0105,+0097,-7680,+0190,-1250N
             string values = data.Substring(1, data.Length - 2);
             string[] parts = values.Split(',');
             
             if (parts.Length != 6) return false;
             
-            // Parse raw integer values
+            // Clean any non-numeric characters except minus sign
+            for (int i = 0; i < parts.Length; i++)
+            {
+                parts[i] = CleanNumericString(parts[i]);
+            }
+            
             rawGyro.x = int.Parse(parts[0]);
             rawGyro.y = int.Parse(parts[1]);
             rawGyro.z = int.Parse(parts[2]);
@@ -263,7 +206,6 @@ public class BluetoothManager : MonoBehaviour
             rawAccel.y = int.Parse(parts[4]);
             rawAccel.z = int.Parse(parts[5]);
             
-            // Convert to degrees
             previousGyroAngles = gyroAngles;
             gyroAngles.x = rawGyro.x / gyroScale;
             gyroAngles.y = rawGyro.y / gyroScale;
@@ -279,29 +221,57 @@ public class BluetoothManager : MonoBehaviour
         }
     }
     
+    // Helper to clean up potentially problematic strings
+    private string CleanNumericString(string input)
+    {
+        // Keep only digits, minus sign, and decimal point
+        string result = "";
+        bool hasMinusSign = false;
+        
+        foreach (char c in input)
+        {
+            if (c == '-' && !hasMinusSign)
+            {
+                result += c;
+                hasMinusSign = true;
+            }
+            else if (char.IsDigit(c) || c == '.')
+            {
+                result += c;
+            }
+        }
+        
+        return result;
+    }
+    
     void ProcessGyroData()
     {
         if (Time.deltaTime > 0)
         {
+            // Calculate velocity
             Vector3 gyroVelocity = new Vector3(
                 (gyroAngles.x - previousGyroAngles.x) / Time.deltaTime,
                 (gyroAngles.y - previousGyroAngles.y) / Time.deltaTime,
                 (gyroAngles.z - previousGyroAngles.z) / Time.deltaTime
             );
             
+            // Apply smoothing
             filteredVelocity = Vector3.Lerp(filteredVelocity, gyroVelocity, smoothingFactor);
+            
+            // Send to listeners
             OnGyroDataReceived?.Invoke(filteredVelocity);
         }
         
         if (enableDebugLogs)
         {
-            Debug.Log($"[Gyro] Raw: X={rawGyro.x} Y={rawGyro.y} Z={rawGyro.z} → Angles: X={gyroAngles.x:F1}° Y={gyroAngles.y:F1}° Z={gyroAngles.z:F1}°");
+            Debug.Log($"[Gyro] X={rawGyro.x:+0000} Y={rawGyro.y:+0000} Z={rawGyro.z:+0000} → vel: {filteredVelocity.magnitude:F1}°/s");
+            Debug.Log($"[Accel] X={rawAccel.x:+0000} Y={rawAccel.y:+0000} Z={rawAccel.z:+0000} → mag: {GetRawAccelMagnitude():F1}");
         }
     }
     
     // Public API
     public bool IsConnected() => isConnected;
-    public string GetConnectedDevice() => connectedDeviceName;
+    public string GetConnectedDevice() => isConnected ? connectedDeviceName : "Not connected";
     public Vector3Int GetRawGyro() => rawGyro;
     public Vector3Int GetRawAccel() => rawAccel;
     public Vector3 GetScaledAccel() => new Vector3(
@@ -318,36 +288,6 @@ public class BluetoothManager : MonoBehaviour
     public int GetValidPackets() => validPackets;
     public int GetErrorPackets() => errorPackets;
     
-    // Manual device switching
-    public void SwitchToDevice(int index)
-    {
-        if (index >= 0 && index < deviceNames.Count)
-        {
-            currentDeviceIndex = index;
-            reconnectAttempts = 0;
-            
-            if (isConnected)
-            {
-                Disconnect();
-                Invoke("ConnectToNextDevice", 1f);
-            }
-            else
-            {
-                ConnectToNextDevice();
-            }
-        }
-    }
-    
-    public void AddDevice(string deviceName)
-    {
-        if (!deviceNames.Contains(deviceName))
-        {
-            deviceNames.Add(deviceName);
-            if (enableDebugLogs)
-                Debug.Log($"[Bluetooth] Added device: {deviceName}");
-        }
-    }
-    
     void OnDestroy()
     {
         Disconnect();
@@ -357,30 +297,20 @@ public class BluetoothManager : MonoBehaviour
     {
         if (!enableDebugLogs) return;
         
-        GUILayout.BeginArea(new Rect(10, Screen.height - 180, 300, 180));
+        GUILayout.BeginArea(new Rect(10, Screen.height - 150, 300, 150));
         
         GUI.color = isConnected ? Color.green : Color.red;
         GUILayout.Label($"Bluetooth: {(isConnected ? "✓ Connected" : "✗ Disconnected")}");
         GUI.color = Color.white;
         
-        if (isConnected)
-        {
-            GUILayout.Label($"Device: {connectedDeviceName}");
-            GUILayout.Label($"Raw Gyro: X={rawGyro.x} Y={rawGyro.y} Z={rawGyro.z}");
-            GUILayout.Label($"Angles: X={gyroAngles.x:F1}° Y={gyroAngles.y:F1}° Z={gyroAngles.z:F1}°");
-        }
-        else
-        {
-            GUILayout.Label($"Trying: {deviceNames[currentDeviceIndex]} ({reconnectAttempts}/{maxReconnectAttempts})");
-        }
-        
         float validRatio = GetValidPacketRatio() * 100f;
         GUILayout.Label($"Packets: {validPackets}/{totalPackets} ({validRatio:F1}%)");
+        GUILayout.Label($"Device: {deviceName}");
         
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Connect")) ConnectToNextDevice();
-        if (GUILayout.Button("Next Device")) TryNextDevice();
+        if (GUILayout.Button("Connect")) Connect();
         if (GUILayout.Button("Disconnect")) Disconnect();
+        if (GUILayout.Button("Next Device")) TryNextDevice();
         GUILayout.EndHorizontal();
         
         GUILayout.EndArea();

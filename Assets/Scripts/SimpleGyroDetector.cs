@@ -14,6 +14,12 @@ public class SimpleGyroDetector : MonoBehaviour
     [SerializeField] private float smoothingFactor = 0.3f;
     [SerializeField] private bool enableSmoothing = true;
     
+    [Header("Continuous Turn Settings")]
+    [SerializeField] private bool enableContinuousTurns = true;
+    [SerializeField] private float continuousTurnForce = 0.5f;
+    [SerializeField] private float maxTurnDuration = 5.0f;
+    [SerializeField] private AnimationCurve turnForceCurve = AnimationCurve.EaseInOut(0, 1, 1, 0.5f);
+    
     [Header("Debug")]
     [SerializeField] private bool enableDebugLogs = true;
     
@@ -36,6 +42,11 @@ public class SimpleGyroDetector : MonoBehaviour
     // Forward pattern tracking
     private List<SwingEvent> swingHistory = new List<SwingEvent>();
     
+    // Continuous turn tracking
+    private bool isApplyingTurn = false;
+    private float turnStartTime = 0f;
+    private BoatController boatController;
+    
     // Events
     public System.Action<BoatState, float> OnStateChanged;
     
@@ -55,7 +66,19 @@ public class SimpleGyroDetector : MonoBehaviour
     
     private void Start()
     {
-        DebugLog("SimpleGyroDetector initialized - Fixed offset, 2s stability");
+        // Find boat controller reference
+        boatController = FindObjectOfType<BoatController>();
+        
+        DebugLog("SimpleGyroDetector initialized - With continuous turning");
+    }
+    
+    private void Update()
+    {
+        // Apply continuous turning if active
+        if (enableContinuousTurns && isApplyingTurn && boatController != null)
+        {
+            ApplyContinuousTurn();
+        }
     }
     
     /// <summary>
@@ -226,6 +249,22 @@ public class SimpleGyroDetector : MonoBehaviour
         
         DebugLog($"State: {previousState} → {currentState} (confidence: {stateConfidence:F2})");
         
+        // Handle continuous turn start/stop
+        if (enableContinuousTurns && boatController != null)
+        {
+            if (newState == BoatState.TurnLeft || newState == BoatState.TurnRight)
+            {
+                if (!isApplyingTurn)
+                {
+                    StartContinuousTurn(newState);
+                }
+            }
+            else if (isApplyingTurn)
+            {
+                StopContinuousTurn();
+            }
+        }
+        
         // Notify listeners
         OnStateChanged?.Invoke(currentState, stateConfidence);
     }
@@ -253,6 +292,61 @@ public class SimpleGyroDetector : MonoBehaviour
         }
     }
     
+    // Continuous turning methods
+    private void StartContinuousTurn(BoatState turnState)
+    {
+        isApplyingTurn = true;
+        turnStartTime = Time.time;
+        
+        // Initial paddle action
+        if (turnState == BoatState.TurnLeft)
+        {
+            boatController.PaddleLeft();
+            DebugLog("Starting continuous LEFT turn");
+        }
+        else if (turnState == BoatState.TurnRight)
+        {
+            boatController.PaddleRight();
+            DebugLog("Starting continuous RIGHT turn");
+        }
+    }
+    
+    private void ApplyContinuousTurn()
+    {
+        // Calculate force
+        float turnDuration = Time.time - turnStartTime;
+        float turnForceMultiplier = turnForceCurve.Evaluate(Mathf.Clamp01(turnDuration / maxTurnDuration));
+        float gyroX = smoothedGyro.x;
+        float intensityMultiplier = Mathf.Clamp01(Mathf.Abs(gyroX) / 30f);
+        float force = continuousTurnForce * turnForceMultiplier * intensityMultiplier;
+        
+        // Add forward thrust
+        boatController.AddForwardThrust(force * 0.3f);
+        
+        // Apply turning force
+        Rigidbody boatRb = boatController.GetComponent<Rigidbody>();
+        if (boatRb != null)
+        {
+            float direction = (currentState == BoatState.TurnLeft) ? 1f : -1f;
+            boatRb.AddTorque(Vector3.up * direction * force, ForceMode.Acceleration);
+        }
+        
+        // Check max duration
+        if (turnDuration > maxTurnDuration)
+        {
+            StopContinuousTurn();
+        }
+    }
+    
+    private void StopContinuousTurn()
+    {
+        if (!isApplyingTurn) return;
+        
+        isApplyingTurn = false;
+        float duration = Time.time - turnStartTime;
+        DebugLog($"Ending continuous turn after {duration:F1}s");
+    }
+    
     // Public getters
     public BoatState GetCurrentState() => currentState;
     public float GetStateConfidence() => stateConfidence;
@@ -261,6 +355,8 @@ public class SimpleGyroDetector : MonoBehaviour
     public bool IsInTurnAngle() => isInTurnAngle;
     public float GetTurnStabilityTime() => isInTurnAngle ? Time.time - turnAngleStartTime : 0f;
     public int GetSwingHistoryCount() => swingHistory.Count;
+    public bool IsContinuousTurning() => isApplyingTurn;
+    public float GetContinuousTurnDuration() => isApplyingTurn ? Time.time - turnStartTime : 0f;
     
     // Force state for testing
     public void ForceState(BoatState state)
@@ -301,6 +397,17 @@ public class SimpleGyroDetector : MonoBehaviour
             float stability = GetTurnStabilityTime();
             GUI.color = stability >= turnStabilityTime ? Color.green : Color.yellow;
             GUILayout.Label($"Turn stability: {stability:F1}s / {turnStabilityTime}s");
+            GUI.color = Color.white;
+        }
+        
+        // Continuous turn info
+        if (isApplyingTurn)
+        {
+            float duration = GetContinuousTurnDuration();
+            float force = continuousTurnForce * turnForceCurve.Evaluate(Mathf.Clamp01(duration / maxTurnDuration));
+            
+            GUI.color = Color.cyan;
+            GUILayout.Label($"Continuous Turn: {duration:F1}s, Force: {force:F2}");
             GUI.color = Color.white;
         }
         
