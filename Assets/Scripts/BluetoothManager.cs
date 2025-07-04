@@ -249,17 +249,13 @@ public class BluetoothManager : MonoBehaviour
         
         try
         {
+            // Remove R and N characters: R+2695,+0105,+0097,-7680,+0190,-1250N
             string values = data.Substring(1, data.Length - 2);
             string[] parts = values.Split(',');
             
             if (parts.Length != 6) return false;
             
-            // Clean any non-numeric characters except minus sign
-            for (int i = 0; i < parts.Length; i++)
-            {
-                parts[i] = CleanNumericString(parts[i]);
-            }
-            
+            // Parse raw integer values
             rawGyro.x = int.Parse(parts[0]);
             rawGyro.y = int.Parse(parts[1]);
             rawGyro.z = int.Parse(parts[2]);
@@ -267,6 +263,7 @@ public class BluetoothManager : MonoBehaviour
             rawAccel.y = int.Parse(parts[4]);
             rawAccel.z = int.Parse(parts[5]);
             
+            // Convert to degrees
             previousGyroAngles = gyroAngles;
             gyroAngles.x = rawGyro.x / gyroScale;
             gyroAngles.y = rawGyro.y / gyroScale;
@@ -280,27 +277,6 @@ public class BluetoothManager : MonoBehaviour
                 Debug.LogWarning($"[Bluetooth] Parse error: {ex.Message}");
             return false;
         }
-    }
-    
-    private string CleanNumericString(string input)
-    {
-        string result = "";
-        bool hasMinusSign = false;
-        
-        foreach (char c in input)
-        {
-            if (c == '-' && !hasMinusSign)
-            {
-                result += c;
-                hasMinusSign = true;
-            }
-            else if (char.IsDigit(c) || c == '.')
-            {
-                result += c;
-            }
-        }
-        
-        return result;
     }
     
     void ProcessGyroData()
@@ -319,7 +295,7 @@ public class BluetoothManager : MonoBehaviour
         
         if (enableDebugLogs)
         {
-            Debug.Log($"[Gyro] X={rawGyro.x:+0000} Y={rawGyro.y:+0000} Z={rawGyro.z:+0000} → vel: {filteredVelocity.magnitude:F1}°/s");
+            Debug.Log($"[Gyro] Raw: X={rawGyro.x} Y={rawGyro.y} Z={rawGyro.z} → Angles: X={gyroAngles.x:F1}° Y={gyroAngles.y:F1}° Z={gyroAngles.z:F1}°");
         }
     }
     
@@ -390,6 +366,8 @@ public class BluetoothManager : MonoBehaviour
         if (isConnected)
         {
             GUILayout.Label($"Device: {connectedDeviceName}");
+            GUILayout.Label($"Raw Gyro: X={rawGyro.x} Y={rawGyro.y} Z={rawGyro.z}");
+            GUILayout.Label($"Angles: X={gyroAngles.x:F1}° Y={gyroAngles.y:F1}° Z={gyroAngles.z:F1}°");
         }
         else
         {
@@ -404,17 +382,6 @@ public class BluetoothManager : MonoBehaviour
         if (GUILayout.Button("Next Device")) TryNextDevice();
         if (GUILayout.Button("Disconnect")) Disconnect();
         GUILayout.EndHorizontal();
-        
-        // Device list
-        for (int i = 0; i < deviceNames.Count; i++)
-        {
-            GUI.color = (i == currentDeviceIndex) ? Color.yellow : Color.white;
-            if (GUILayout.Button($"{i + 1}: {deviceNames[i]}"))
-            {
-                SwitchToDevice(i);
-            }
-        }
-        GUI.color = Color.white;
         
         GUILayout.EndArea();
     }
