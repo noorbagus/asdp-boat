@@ -5,8 +5,6 @@ public class PaddleIKController : MonoBehaviour
     [Header("References")]
     public Transform paddle;
     public Transform character;
-    public BoatController boatController;
-    public GyroPatternDetector patternDetector;
     
     [Header("Transform Settings")]
     public Vector3 offsetFromCharacter = new Vector3(0, 1f, 0.5f);
@@ -21,27 +19,10 @@ public class PaddleIKController : MonoBehaviour
     [Range(5f, 100f)] public float swingAmplitude = 25f;
     public bool useBalancedSwing = true;
     
-    [Header("Pattern Detection")]
-    public int minConsecutivePaddles = 2;
-    public float speedThreshold = 0.3f;
-    public float patternChangeDelay = 0.1f;
-    public float patternBlendDuration = 0.8f;
-    
-    [Header("ESP32 Integration")]
-    public bool useRawAngle = false;
+    [Header("Raw Angle Input")]
+    public bool useRawAngle = true;
     public float rawAngleMultiplier = 1.0f;
     [Range(0f, 1f)] public float rawAngleSmoothing = 0.8f;
-    public bool overrideWithRawAngle = true;
-    
-    [Header("Gyro Idle Mode")]
-    public bool syncIdleWithGyro = true;
-    public float idleGyroSensitivity = 1.0f;
-    public float idleThreshold = 0.1f;
-    public float gyroIdleSmoothing = 5f;
-    
-    [Header("Auto Straighten")]
-    public bool enableAutoStraighten = false;
-    public float autoStraightenDelay = 2f;
     
     [Header("Debug")]
     public bool enableDebugLogs = true;
@@ -55,51 +36,19 @@ public class PaddleIKController : MonoBehaviour
     private float currentRotationValue;
     private float targetRotationValue;
     private float swingTimer;
-    private float lastPatternChangeTime;
     
-    // ESP32 & Gyro
+    // Raw angle input
     private float smoothedRawAngle = 0f;
-    private float smoothedGyroIdle = 0f;
-    private bool isESP32Controlled = false;
-    private ESP32GyroController esp32Controller;
-    
-    // Pattern integration
-    private float patternProcessCooldown = 0f;
-    private const float patternProcessInterval = 0.1f;
+    private float currentRawAngle = 0f;
     
     void Start()
     {
         InitializePaddle();
-        esp32Controller = FindObjectOfType<ESP32GyroController>();
-        
-        if (patternDetector == null)
-            patternDetector = FindObjectOfType<GyroPatternDetector>();
-        
-        if (esp32Controller != null && syncIdleWithGyro)
-            enableAutoStraighten = false;
     }
     
     void Update()
     {
         UpdatePaddleTransform();
-        CheckESP32Control();
-        
-        patternProcessCooldown -= Time.deltaTime;
-        
-        // Priority: Pattern detector > ESP32 > Legacy detection
-        if (patternDetector != null && patternProcessCooldown <= 0f)
-        {
-            HandlePatternDetection();
-        }
-        else if (useRawAngle && isESP32Controlled)
-        {
-            HandleESP32Input();
-        }
-        else
-        {
-            HandleLegacyDetection();
-        }
-        
         ApplyRotation();
     }
     
@@ -121,123 +70,51 @@ public class PaddleIKController : MonoBehaviour
         paddle.localScale = paddleScale;
     }
     
-    private void CheckESP32Control()
+    private void ApplyRotation()
     {
-        bool wasControlled = isESP32Controlled;
-        isESP32Controlled = (esp32Controller != null && esp32Controller.IsConnected());
+        if (paddle == null || character == null) return;
         
-        if (isESP32Controlled && overrideWithRawAngle)
-            useRawAngle = true;
-        
-        if (wasControlled != isESP32Controlled)
-            DebugLog($"ESP32 control: {(isESP32Controlled ? "ON" : "OFF")}");
-    }
-    
-    private void HandlePatternDetection()
-    {
-        var detectedPattern = patternDetector.GetCurrentPattern();
-        float confidence = patternDetector.GetPatternConfidence();
-        
-        if (confidence < 0.5f) return;
-        
-        PaddlePattern mappedPattern = MapPattern(detectedPattern);
-        
-        if (mappedPattern != currentPattern)
+        if (useRawAngle && currentPattern != PaddlePattern.None)
         {
-            SetPattern(mappedPattern);
-            patternProcessCooldown = patternProcessInterval;
-        }
-        
-        AnimatePattern(mappedPattern, confidence);
-    }
-    
-    private PaddlePattern MapPattern(GyroPatternDetector.MovementPattern detected)
-    {
-        switch (detected)
-        {
-            case GyroPatternDetector.MovementPattern.Forward:
-                return PaddlePattern.Alternating;
-            case GyroPatternDetector.MovementPattern.TurnLeft:
-                return PaddlePattern.ConsecutiveRight;
-            case GyroPatternDetector.MovementPattern.TurnRight:
-                return PaddlePattern.ConsecutiveLeft;
-            case GyroPatternDetector.MovementPattern.Idle:
-                return (isESP32Controlled && syncIdleWithGyro) ? PaddlePattern.GyroIdle : PaddlePattern.None;
-            default:
-                return PaddlePattern.None;
-        }
-    }
-    
-    private void HandleESP32Input()
-    {
-        if (esp32Controller == null) return;
-        
-        bool isIdle = IsBoatIdle();
-        
-        if (isIdle && syncIdleWithGyro)
-        {
-            // Gyro idle mode
-            float targetAngle = esp32Controller.GetSmoothedGyroValue() * idleGyroSensitivity;
-            smoothedGyroIdle = Mathf.Lerp(smoothedGyroIdle, targetAngle, gyroIdleSmoothing * Time.deltaTime);
-            targetRotationValue = initialRotation.z + smoothedGyroIdle;
-            
-            if (currentPattern != PaddlePattern.GyroIdle)
-                SetPattern(PaddlePattern.GyroIdle);
-        }
-        else
-        {
-            // Active mode
-            smoothedRawAngle = Mathf.Lerp(smoothedRawAngle, esp32Controller.GetSmoothedGyroValue() * rawAngleMultiplier, 
+            // Use raw angle from PaddleInputManager
+            smoothedRawAngle = Mathf.Lerp(smoothedRawAngle, currentRawAngle * rawAngleMultiplier, 
                                          (1f - rawAngleSmoothing) * Time.deltaTime * 10f);
             targetRotationValue = initialRotation.z + smoothedRawAngle;
         }
-    }
-    
-    private void HandleLegacyDetection()
-    {
-        if (boatController == null) return;
-        
-        int leftCount = boatController.GetConsecutiveLeftCount();
-        int rightCount = boatController.GetConsecutiveRightCount();
-        float currentSpeed = boatController.GetCurrentSpeed();
-        
-        PaddlePattern newPattern = DeterminePattern(leftCount, rightCount, currentSpeed);
-        
-        if (newPattern != currentPattern && Time.time - lastPatternChangeTime > patternChangeDelay)
+        else
         {
-            SetPattern(newPattern);
+            // Use pattern-based animation
+            AnimatePattern(currentPattern);
         }
         
-        AnimatePattern(currentPattern, 1f);
-    }
-    
-    private PaddlePattern DeterminePattern(int leftCount, int rightCount, float speed)
-    {
-        if (leftCount >= minConsecutivePaddles) return PaddlePattern.ConsecutiveLeft;
-        if (rightCount >= minConsecutivePaddles) return PaddlePattern.ConsecutiveRight;
-        if (speed > speedThreshold) return PaddlePattern.Alternating;
+        // Smooth rotation
+        currentRotationValue = Mathf.LerpAngle(currentRotationValue, targetRotationValue, rotationSpeed * Time.deltaTime);
         
-        return (isESP32Controlled && syncIdleWithGyro && IsBoatIdle()) ? PaddlePattern.GyroIdle : PaddlePattern.None;
+        // Apply rotation
+        paddle.eulerAngles = new Vector3(
+            initialRotation.x,
+            character.eulerAngles.y + rotationOffset.y,
+            currentRotationValue
+        );
     }
     
-    private void AnimatePattern(PaddlePattern pattern, float confidence)
+    private void AnimatePattern(PaddlePattern pattern)
     {
-        swingTimer += Time.deltaTime * swingSpeed * confidence;
+        swingTimer += Time.deltaTime * swingSpeed;
         
         switch (pattern)
         {
             case PaddlePattern.Alternating:
-                targetRotationValue = initialRotation.z + CalculateAlternatingSwing() * confidence;
+                targetRotationValue = initialRotation.z + CalculateAlternatingSwing();
                 break;
             case PaddlePattern.ConsecutiveLeft:
-                targetRotationValue = initialRotation.z + (leftPaddleAngle + CalculateSwing() * 0.6f) * confidence;
+                targetRotationValue = initialRotation.z + (leftPaddleAngle + CalculateSwing() * 0.6f);
                 break;
             case PaddlePattern.ConsecutiveRight:
-                targetRotationValue = initialRotation.z + (rightPaddleAngle + CalculateSwing() * 0.6f) * confidence;
+                targetRotationValue = initialRotation.z + (rightPaddleAngle + CalculateSwing() * 0.6f);
                 break;
             case PaddlePattern.GyroIdle:
-                if (isESP32Controlled)
-                    targetRotationValue = initialRotation.z + smoothedGyroIdle;
+                // Keep current raw angle
                 break;
             default:
                 targetRotationValue = initialRotation.z;
@@ -257,51 +134,37 @@ public class PaddleIKController : MonoBehaviour
         return Mathf.Abs(Mathf.Sin(swingTimer * 0.8f)) * swingAmplitude;
     }
     
-    private void ApplyRotation()
+    // PUBLIC API - Called by PaddleInputManager
+    public void SetRawAngle(float angle)
     {
-        if (paddle == null || character == null) return;
+        currentRawAngle = angle;
+        currentPattern = PaddlePattern.GyroIdle;
         
-        // Auto-straighten check
-        if (enableAutoStraighten && !isESP32Controlled && 
-            currentPattern == PaddlePattern.None && 
-            Time.time - lastPatternChangeTime > autoStraightenDelay)
-        {
-            float currentY = currentRotationValue;
-            if (currentY > 180f) currentY -= 360f;
-            targetRotationValue += -currentY * 0.5f * Time.deltaTime;
-        }
-        
-        // Smooth rotation
-        currentRotationValue = Mathf.LerpAngle(currentRotationValue, targetRotationValue, rotationSpeed * Time.deltaTime);
-        
-        // Apply rotation
-        paddle.eulerAngles = new Vector3(
-            initialRotation.x,
-            character.eulerAngles.y + rotationOffset.y,
-            currentRotationValue
-        );
-    }
-    
-    private void SetPattern(PaddlePattern pattern)
-    {
-        currentPattern = pattern;
-        lastPatternChangeTime = Time.time;
-        DebugLog($"Pattern: {pattern}");
-    }
-    
-    private bool IsBoatIdle()
-    {
-        if (boatController == null) return true;
-        return boatController.GetCurrentSpeed() < idleThreshold && 
-               !boatController.IsLeftPaddling() && 
-               !boatController.IsRightPaddling();
-    }
-    
-    private void DebugLog(string message)
-    {
         if (enableDebugLogs)
-            Debug.Log($"[PaddleIK] {message}");
+            DebugLog($"Raw angle set: {angle:F1}°");
     }
+    
+    public void SetPattern(PaddlePattern pattern)
+    {
+        if (pattern != currentPattern)
+        {
+            currentPattern = pattern;
+            DebugLog($"Pattern: {pattern}");
+        }
+    }
+    
+    public void ForcePattern(int patternIndex)
+    {
+        if (patternIndex >= 0 && patternIndex < System.Enum.GetValues(typeof(PaddlePattern)).Length)
+        {
+            SetPattern((PaddlePattern)patternIndex);
+        }
+    }
+    
+    // Getters
+    public PaddlePattern GetCurrentPattern() => currentPattern;
+    public float GetCurrentAngle() => currentRotationValue - initialRotation.z;
+    public bool IsUsingRawAngle() => useRawAngle && currentPattern == PaddlePattern.GyroIdle;
     
     void OnDrawGizmos()
     {
@@ -313,7 +176,7 @@ public class PaddleIKController : MonoBehaviour
         
         if (paddle != null && Application.isPlaying)
         {
-            Color patternColor = isESP32Controlled ? Color.magenta : GetPatternColor();
+            Color patternColor = GetPatternColor();
             Gizmos.color = patternColor;
             Gizmos.DrawWireCube(paddle.position + Vector3.up * 0.5f, Vector3.one * 0.2f);
         }
@@ -331,30 +194,9 @@ public class PaddleIKController : MonoBehaviour
         }
     }
     
-    // Public API
-    public PaddlePattern GetCurrentPattern() => currentPattern;
-    public bool IsESP32Controlled() => isESP32Controlled;
-    public bool IsInGyroIdleMode() => currentPattern == PaddlePattern.GyroIdle;
-    
-    public void SetRawAngle(float angle)
+    private void DebugLog(string message)
     {
-        useRawAngle = true;
-        smoothedRawAngle = angle;
-    }
-    
-    public void SetBalancedSwing(bool enabled)
-    {
-        useBalancedSwing = enabled;
-    }
-    
-    public void ForcePattern(int patternIndex)
-    {
-        if (isESP32Controlled && overrideWithRawAngle) return;
-        
-        useRawAngle = false;
-        if (patternIndex >= 0 && patternIndex < System.Enum.GetValues(typeof(PaddlePattern)).Length)
-        {
-            SetPattern((PaddlePattern)patternIndex);
-        }
+        if (enableDebugLogs)
+            Debug.Log($"[PaddleIK] {message}");
     }
 }
