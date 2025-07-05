@@ -1,643 +1,752 @@
-using System;
-using System.Collections;
 using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
+using System;
+using ArduinoBluetoothAPI;
 
 public class PaddleController : MonoBehaviour
 {
-    [Header("Bluetooth Connection")]
-    [SerializeField] private BluetoothManager bluetoothManager;
-    
-    [Header("Paddle Configuration")]
-    [SerializeField] private float tiltThreshold = 15.0f;
-    [SerializeField] private float maxTiltOutput = 45.0f;
-    [SerializeField] private float stabilityThreshold = 0.5f;
-    [SerializeField] private float gyroNoiseThreshold = 5.0f;
-    [SerializeField] private float idleDuration = 2.0f;
-    [SerializeField] private float correctionFactor = 0.2f;
-    [SerializeField] private bool enableDebugLogs = true;
-    
-    [Header("Calibration")]
-    [SerializeField] private int calibrationSamples = 50;
-    [SerializeField] private bool autoCalibrate = true;
-    [SerializeField] private float autoCalibrationDelay = 3.0f;
-    [SerializeField] private bool useMultiPoint = true; // Default to 3-point calibration
-    
-    // Constants
-    private const float GRAVITY = 9.8f;
-    private const float RAD_TO_DEG = 180.0f / Mathf.PI;
-    
-    // Baseline data
-    private Vector3 baselineAccel = Vector3.zero;
-    private float baselineGyroZ = 0f;
-    
-    // Multi-point calibration data
-    private Vector3[] calibrationAccel = new Vector3[3]; // neutral, left, right
-    private float[] calibrationGyroZ = new float[3];
-    private int currentCalibrationStep = 0;
-    private bool isMultiPointCalibrating = false;
-    
-    // Processed data
-    private float zAngle = 0f;
-    private float correctedGyroZ = 0f;
-    private float accelMagnitude = 0f;
-    private float tiltAngleZ = 0f;
-    
-    // Timing data
-    private float lastTime = 0f;
-    private float lastMovement = 0f;
-    private float idleStart = 0f;
-    
-    // State data
-    private bool isIdleState = false;
-    private bool isCalibrated = false;
-    private PaddleState paddleState = PaddleState.Neutral;
-    
-    // Output data
-    private float finalZAngle = 0f;
-    private int paddleDirection = 0;
-    private float tiltIntensity = 0f;
-    
-    // Debug data
-    private float driftCorrection = 0f;
-    private float stabilityScore = 0f;
-    private int calibrationProgress = 0;
-    private bool isCalibrating = false;
-    
-    // Calibration data collection
-    private Vector3[] accelSamples;
-    private float[] gyroZSamples;
-    private int sampleIndex = 0;
-    
-    // Simple Calibration UI
-    private bool showCalibrationUI = false;
-    private string currentStepText = "";
-    private GUIStyle backgroundStyle;
-    private GUIStyle cardStyle;
-    private GUIStyle titleStyle;
-    private GUIStyle instructionStyle;
-    private GUIStyle progressStyle;
-    private bool uiInitialized = false;
-    
-    // Events
-    public System.Action<float> OnZAngleChanged;
-    public System.Action<PaddleState> OnPaddleStateChanged;
-    public System.Action<bool> OnCalibrationStatusChanged;
-    public System.Action<int, float> OnTiltDetected;
-    public System.Action<string> OnCalibrationStepChanged;
-    
+    [Header("=== BLUETOOTH CONNECTION ===")]
+    [Tooltip("Bluetooth device name to connect to")]
+    public string deviceName = "ferizy-paddle";
+    [Tooltip("Automatically connect on start")]
+    public bool autoConnect = true;
+    [Tooltip("Connection timeout in seconds")]
+    public float connectionTimeout = 30f;
+
+    [Header("=== CALIBRATION SETTINGS ===")]
+    [Tooltip("Use 3-phase calibration (neutral→right→left) vs single-phase")]
+    public bool useMultiPointCalibration = true;
+    [Tooltip("Number of samples for each calibration point")]
+    public int calibrationSamples = 30;
+    [Tooltip("Stability threshold during calibration (degrees)")]
+    public float calibrationStabilityThreshold = 3f;
+    [Tooltip("Time to hold position during calibration")]
+    public float calibrationHoldTime = 2f;
+    [Tooltip("Enable automatic calibration on start")]
+    public bool autoCalibrate = true;
+    [Tooltip("Delay before starting auto-calibration")]
+    public float autoCalibrationDelay = 2f;
+
+    [Header("=== TILT DETECTION THRESHOLDS ===")]
+    [Tooltip("Angle threshold for left tilt detection")]
+    public float leftTiltThreshold = -60f;
+    [Tooltip("Angle threshold for right tilt detection")]
+    public float rightTiltThreshold = -120f;
+    [Tooltip("Dead zone around neutral position")]
+    public float deadZone = 25f;
+    [Tooltip("Minimum angle change to register as tilt")]
+    public float minTiltChange = 8f;
+
+    [Header("=== MOVEMENT DETECTION ===")]
+    [Tooltip("Minimum velocity to trigger movement (degrees/sec)")]
+    public float movementVelocityThreshold = 15f;
+    [Tooltip("Minimum angle change to register as movement")]
+    public float movementAngleThreshold = 8f;
+    [Tooltip("Time window for movement detection")]
+    public float movementTimeWindow = 0.3f;
+    [Tooltip("Forward swing velocity threshold")]
+    public float forwardSwingThreshold = 20f;
+
+    [Header("=== DATA SMOOTHING ===")]
+    [Tooltip("Smoothing factor for angle data (0-1)")]
+    [Range(0f, 1f)]
+    public float angleSmoothingFactor = 0.7f;
+    [Tooltip("Smoothing factor for velocity calculation")]
+    [Range(0f, 1f)]
+    public float velocitySmoothingFactor = 0.5f;
+    [Tooltip("Enable data smoothing")]
+    public bool enableSmoothing = true;
+
+    [Header("=== STATE TRANSITION ===")]
+    [Tooltip("Minimum time to stay in a state before changing")]
+    public float stateChangeDelay = 0.3f;
+    [Tooltip("Confidence threshold for state changes")]
+    [Range(0f, 1f)]
+    public float stateConfidenceThreshold = 0.7f;
+    [Tooltip("Debounce time for rapid state changes")]
+    public float stateDebounceTime = 0.2f;
+
+    [Header("=== PATTERN RECOGNITION ===")]
+    [Tooltip("Enable alternating pattern detection")]
+    public bool enablePatternDetection = true;
+    [Tooltip("Time window for alternating pattern")]
+    public float alternatingTimeWindow = 1.5f;
+    [Tooltip("Minimum swings for forward pattern")]
+    public int minSwingsForForward = 2;
+
+    [Header("=== DEBUG SETTINGS ===")]
+    [Tooltip("Show real-time angle values")]
+    public bool showAngleDebug = true;
+    [Tooltip("Show calibration status")]
+    public bool showCalibrationDebug = true;
+    [Tooltip("Show state transitions")]
+    public bool showStateDebug = true;
+    [Tooltip("Log detailed movement data")]
+    public bool verboseLogging = false;
+    [Tooltip("Enable debug logs")]
+    public bool enableDebugLogs = true;
+
+    // Paddle states
     public enum PaddleState
     {
-        Neutral,
+        Idle,
         TiltLeft,
-        TiltRight
+        TiltRight,
+        SwingForward,
+        Calibrating,
+        Disconnected
     }
+
+    // Events
+    public Action<PaddleState> OnStateChanged;
+    public Action<int, float> OnTiltDetected; // direction (-1,1), intensity
+    public Action<float> OnForwardSwing; // velocity
+    public Action<bool> OnCalibrationComplete; // success
+
+    // Current state
+    private PaddleState currentState = PaddleState.Disconnected;
+    private PaddleState previousState = PaddleState.Disconnected;
+    private float stateConfidence = 0f;
+    private float lastStateChangeTime = 0f;
+
+    // Bluetooth connection
+    private BluetoothHelper bluetoothHelper;
+    private bool isConnected = false;
+    private string lastPacket = "";
+    private int packetsReceived = 0;
+    private int validPackets = 0;
+
+    // Angle data
+    private float currentAngle = 0f;
+    private float smoothedAngle = 0f;
+    private float previousAngle = 0f;
+    private float angleVelocity = 0f;
+    private float smoothedVelocity = 0f;
+
+    // Calibration - Fixed 3-phase system
+    private bool isCalibrated = false;
+    private bool isCalibrating = false;
+    private float leftAngle = 0f;
+    private float rightAngle = 0f;
+    private float neutralAngle = 0f;
     
+    // 3-phase calibration data
+    private List<float> neutralSamples = new List<float>();
+    private List<float> leftSamples = new List<float>();
+    private List<float> rightSamples = new List<float>();
+    private int currentCalibrationPhase = 0; // 0=neutral, 1=right, 2=left
+    private string[] calibrationPhaseNames = { "Neutral", "Right", "Left" };
+
+    // Pattern detection
+    private List<SwingData> swingHistory = new List<SwingData>();
+    private float lastSignificantMove = 0f;
+
+    private struct SwingData
+    {
+        public float timestamp;
+        public float angle;
+        public float velocity;
+        public bool isLeftSwing;
+    }
+
     void Start()
     {
-        if (bluetoothManager == null)
-            bluetoothManager = FindObjectOfType<BluetoothManager>();
+        DebugLog("PaddleController starting with fixed 3-phase calibration");
+        InitializeBluetooth();
         
-        if (bluetoothManager == null)
+        if (autoConnect)
         {
-            Debug.LogError("[PaddleController] BluetoothManager not found!");
-            return;
+            StartCoroutine(AutoConnectRoutine());
         }
-        
-        bluetoothManager.OnConnectionChanged += OnBluetoothConnectionChanged;
-        
-        accelSamples = new Vector3[calibrationSamples];
-        gyroZSamples = new float[calibrationSamples];
-        
-        lastTime = Time.time;
-        lastMovement = Time.time;
-        
-        InitializeCalibrationUI();
-        
-        Debug.Log("[PaddleController] Initialized. Auto-calibration will start when Bluetooth connects.");
     }
-    
+
     void Update()
     {
-        if (bluetoothManager != null && bluetoothManager.IsConnected())
+        if (isConnected)
         {
-            if (isCalibrating || isMultiPointCalibrating)
-            {
-                if (!isMultiPointCalibrating)
-                    UpdateCalibration();
-            }
-            else if (isCalibrated)
-            {
-                ProcessPaddleData();
-            }
+            ProcessPaddleData();
+            UpdatePaddleState();
+            CleanupSwingHistory();
         }
     }
-    
-    void OnBluetoothConnectionChanged(bool connected)
+
+    #region Bluetooth Connection
+    void InitializeBluetooth()
     {
-        if (connected && autoCalibrate && !isCalibrated)
+        try
         {
-            Invoke("StartAutoCalibration", autoCalibrationDelay);
-        }
-        
-        Debug.Log($"[PaddleController] Bluetooth {(connected ? "connected" : "disconnected")}");
-    }
-    
-    void StartAutoCalibration()
-    {
-        if (bluetoothManager.IsConnected() && !isCalibrated)
-        {
-            Debug.Log("[PaddleController] 🚀 Auto-starting calibration...");
-            StartCalibration();
-        }
-    }
-    
-    #region Simple Calibration UI
-    
-    void InitializeCalibrationUI()
-    {
-        // Navy blue maritime theme
-        Color navyBlue = new Color(0.1f, 0.2f, 0.4f, 0.95f);
-        Color lightBlue = new Color(0.3f, 0.6f, 1f, 1f);
-        Color darkCard = new Color(0.15f, 0.25f, 0.45f, 0.9f);
-        
-        backgroundStyle = new GUIStyle();
-        backgroundStyle.normal.background = CreateColorTexture(navyBlue);
-        
-        cardStyle = new GUIStyle();
-        cardStyle.normal.background = CreateColorTexture(darkCard);
-        cardStyle.border = new RectOffset(10, 10, 10, 10);
-        cardStyle.padding = new RectOffset(30, 30, 30, 30);
-        
-        titleStyle = new GUIStyle();
-        titleStyle.fontSize = 28;
-        titleStyle.fontStyle = FontStyle.Bold;
-        titleStyle.alignment = TextAnchor.MiddleCenter;
-        titleStyle.normal.textColor = Color.white;
-        
-        instructionStyle = new GUIStyle();
-        instructionStyle.fontSize = 18;
-        instructionStyle.alignment = TextAnchor.MiddleCenter;
-        instructionStyle.normal.textColor = new Color(0.9f, 0.9f, 0.9f);
-        instructionStyle.wordWrap = true;
-        
-        progressStyle = new GUIStyle();
-        progressStyle.normal.background = CreateColorTexture(lightBlue);
-        
-        uiInitialized = true;
-    }
-    
-    Texture2D CreateColorTexture(Color color)
-    {
-        Texture2D texture = new Texture2D(1, 1);
-        texture.SetPixel(0, 0, color);
-        texture.Apply();
-        return texture;
-    }
-    
-    void OnGUI()
-    {
-        if (!showCalibrationUI || !uiInitialized) return;
-        
-        float centerX = Screen.width * 0.5f;
-        float centerY = Screen.height * 0.5f;
-        float cardWidth = 500f;
-        float cardHeight = 300f;
-        
-        // Background overlay
-        GUI.Box(new Rect(0, 0, Screen.width, Screen.height), "", backgroundStyle);
-        
-        // Main calibration card
-        Rect cardRect = new Rect(centerX - cardWidth * 0.5f, centerY - cardHeight * 0.5f, cardWidth, cardHeight);
-        GUI.Box(cardRect, "", cardStyle);
-        
-        GUILayout.BeginArea(cardRect);
-        
-        GUILayout.Space(20);
-        
-        // Title
-        GUILayout.Label("⚓ KALIBRASI PADDLE", titleStyle);
-        GUILayout.Space(20);
-        
-        // Current step instruction
-        if (!string.IsNullOrEmpty(currentStepText))
-        {
-            GUILayout.Label(currentStepText, instructionStyle);
-            GUILayout.Space(15);
-        }
-        
-        // Progress bar
-        DrawProgressBar();
-        
-        GUILayout.Space(15);
-        
-        // Progress percentage
-        var percentStyle = new GUIStyle(instructionStyle);
-        percentStyle.fontSize = 24;
-        percentStyle.fontStyle = FontStyle.Bold;
-        GUILayout.Label($"{calibrationProgress}%", percentStyle);
-        
-        GUILayout.EndArea();
-    }
-    
-    void DrawProgressBar()
-    {
-        float barWidth = 400f;
-        float barHeight = 20f;
-        float progress = calibrationProgress / 100f;
-        
-        Rect barBg = GUILayoutUtility.GetRect(barWidth, barHeight);
-        barBg.x = (Screen.width - barWidth) * 0.5f - 250f; // Center in card
-        
-        // Background
-        GUI.color = new Color(0.2f, 0.2f, 0.3f, 0.8f);
-        GUI.Box(barBg, "", progressStyle);
-        
-        // Progress fill
-        Rect fillRect = new Rect(barBg.x, barBg.y, barBg.width * progress, barBg.height);
-        GUI.color = new Color(0.3f, 0.8f, 1f, 1f);
-        GUI.Box(fillRect, "", progressStyle);
-        
-        GUI.color = Color.white;
-    }
-    
-    #endregion
-    
-    #region Calibration (Enhanced with Multi-Point)
-    
-    public void StartCalibration()
-    {
-        if (!bluetoothManager.IsConnected())
-        {
-            Debug.LogWarning("[PaddleController] Cannot calibrate - Bluetooth not connected!");
-            return;
-        }
-        
-        isCalibrated = false;
-        calibrationProgress = 0;
-        showCalibrationUI = true;
-        
-        OnCalibrationStatusChanged?.Invoke(true);
-        
-        if (useMultiPoint)
-        {
-            StartMultiPointCalibration();
-        }
-        else
-        {
-            StartSinglePointCalibration();
-        }
-    }
-    
-    void StartSinglePointCalibration()
-    {
-        isCalibrating = true;
-        sampleIndex = 0;
-        currentStepText = "Tahan paddle di posisi NETRAL";
-        
-        Debug.Log("[PaddleController] 🎯 Single-point calibration started...");
-        OnCalibrationStepChanged?.Invoke("Keep paddle in NEUTRAL position");
-    }
-    
-    void StartMultiPointCalibration()
-    {
-        isMultiPointCalibrating = true;
-        currentCalibrationStep = 0;
-        currentStepText = "Langkah 1/3: Tahan paddle di posisi NETRAL";
-        
-        Debug.Log("[PaddleController] 🎯 3-point calibration started...");
-        OnCalibrationStepChanged?.Invoke("Step 1/3: Hold paddle in NEUTRAL position");
-        
-        StartCoroutine(MultiPointCalibrationRoutine());
-    }
-    
-    IEnumerator MultiPointCalibrationRoutine()
-    {
-        string[] stepNames = { "NETRAL", "KIRI (-30°)", "KANAN (+30°)" };
-        string[] stepInstructions = { 
-            "Langkah 1/3: Tahan paddle di posisi NETRAL",
-            "Langkah 2/3: Miringkan paddle ke KIRI (-30°)", 
-            "Langkah 3/3: Miringkan paddle ke KANAN (+30°)"
-        };
-        
-        for (int step = 0; step < 3; step++)
-        {
-            currentCalibrationStep = step;
-            currentStepText = stepInstructions[step];
+            BluetoothHelper.BLE = false;
+            bluetoothHelper = BluetoothHelper.GetInstance(deviceName);
+            bluetoothHelper.OnConnected += OnBluetoothConnected;
+            bluetoothHelper.OnConnectionFailed += OnBluetoothConnectionFailed;
+            bluetoothHelper.OnDataReceived += OnBluetoothDataReceived;
+            bluetoothHelper.setTerminatorBasedStream("\n");
             
-            Debug.Log($"[PaddleController] Step {step + 1}/3: Position paddle {stepNames[step]}");
-            OnCalibrationStepChanged?.Invoke($"Step {step + 1}/3: Hold paddle in {stepNames[step]} position");
-            
-            yield return new WaitForSeconds(2f);
-            
-            Vector3 accelSum = Vector3.zero;
-            float gyroZSum = 0f;
-            
-            for (int i = 0; i < calibrationSamples; i++)
-            {
-                Vector3 accel = bluetoothManager.GetScaledAccel();
-                Vector3 gyro = bluetoothManager.GetGyroAngles();
-                
-                accelSum += accel;
-                gyroZSum += gyro.z;
-                
-                calibrationProgress = Mathf.RoundToInt((float)(step * calibrationSamples + i) / (3 * calibrationSamples) * 100);
-                
-                yield return new WaitForSeconds(0.02f);
-            }
-            
-            calibrationAccel[step] = accelSum / calibrationSamples;
-            calibrationGyroZ[step] = gyroZSum / calibrationSamples;
-            
-            Debug.Log($"[PaddleController] ✅ Step {step + 1} completed");
+            DebugLog("Bluetooth initialized");
         }
-        
-        FinishMultiPointCalibration();
-    }
-    
-    void UpdateCalibration()
-    {
-        Vector3 rawAccel = bluetoothManager.GetScaledAccel();
-        Vector3 rawGyro = bluetoothManager.GetGyroAngles();
-        
-        accelSamples[sampleIndex] = rawAccel;
-        gyroZSamples[sampleIndex] = rawGyro.z;
-        
-        sampleIndex++;
-        calibrationProgress = Mathf.RoundToInt((float)sampleIndex / calibrationSamples * 100);
-        
-        if (enableDebugLogs && sampleIndex % 10 == 0)
-            Debug.Log($"[PaddleController] Calibration progress: {calibrationProgress}%");
-        
-        if (sampleIndex >= calibrationSamples)
+        catch (Exception ex)
         {
-            FinishSinglePointCalibration();
+            DebugLog($"Bluetooth init error: {ex.Message}");
         }
     }
-    
-    void FinishSinglePointCalibration()
+
+    IEnumerator AutoConnectRoutine()
     {
-        Vector3 accelSum = Vector3.zero;
-        float gyroZSum = 0f;
-        
-        for (int i = 0; i < calibrationSamples; i++)
-        {
-            accelSum += accelSamples[i];
-            gyroZSum += gyroZSamples[i];
-        }
-        
-        baselineAccel = accelSum / calibrationSamples;
-        baselineGyroZ = gyroZSum / calibrationSamples;
-        
-        FinishCalibration();
+        yield return new WaitForSeconds(1f);
+        ConnectToBluetooth();
     }
-    
-    void FinishMultiPointCalibration()
+
+    public void ConnectToBluetooth()
     {
-        baselineAccel = calibrationAccel[0];
-        baselineGyroZ = calibrationGyroZ[0];
-        
-        Vector3 leftDiff = calibrationAccel[1] - calibrationAccel[0];
-        Vector3 rightDiff = calibrationAccel[2] - calibrationAccel[0];
-        
-        float leftAngle = Mathf.Atan2(leftDiff.x, leftDiff.y) * RAD_TO_DEG;
-        float rightAngle = Mathf.Atan2(rightDiff.x, rightDiff.y) * RAD_TO_DEG;
-        
-        Debug.Log($"[PaddleController] Left angle: {leftAngle:F1}°, Right angle: {rightAngle:F1}°");
-        
-        FinishCalibration();
-    }
-    
-    void FinishCalibration()
-    {
-        zAngle = 0f;
-        isCalibrated = true;
-        isCalibrating = false;
-        isMultiPointCalibrating = false;
-        showCalibrationUI = false;
-        currentStepText = "Kalibrasi selesai!";
-        
-        OnCalibrationStatusChanged?.Invoke(false);
-        OnCalibrationStepChanged?.Invoke("Calibration completed!");
-        
-        Debug.Log("[PaddleController] ✅ Calibration completed!");
-        Debug.Log($"[PaddleController] 📐 Baseline Accel: {baselineAccel}");
-        Debug.Log($"[PaddleController] 🌀 Baseline Gyro Z: {baselineGyroZ:F3}");
-        
-        float magnitude = baselineAccel.magnitude;
-        if (Mathf.Abs(magnitude - GRAVITY) > 2.0f)
+        if (bluetoothHelper != null && !bluetoothHelper.isConnected())
         {
-            Debug.LogWarning("[PaddleController] ⚠️ Unusual gravity reading. Check sensor orientation!");
+            bluetoothHelper.Connect();
+            DebugLog("Connecting to Bluetooth...");
         }
     }
-    
-    #endregion
-    
-    #region Motion Detection
-    
-    bool IsSensorStable()
+
+    void OnBluetoothConnected(BluetoothHelper helper)
     {
-        Vector3 accel = bluetoothManager.GetScaledAccel();
-        Vector3 gyro = bluetoothManager.GetGyroAngles();
+        isConnected = true;
+        helper.StartListening();
+        DebugLog($"✓ Connected to {deviceName}");
         
-        accelMagnitude = accel.magnitude;
-        bool accelStable = (Mathf.Abs(accelMagnitude - GRAVITY) < stabilityThreshold);
-        
-        bool gyroStable = (Mathf.Abs(gyro.x) < gyroNoiseThreshold && 
-                          Mathf.Abs(gyro.y) < gyroNoiseThreshold && 
-                          Mathf.Abs(gyro.z) < gyroNoiseThreshold);
-        
-        float accelScore = Mathf.Max(0f, 1f - Mathf.Abs(accelMagnitude - GRAVITY) / 2f);
-        float gyroScore = Mathf.Max(0f, 1f - Mathf.Abs(gyro.z) / 20f);
-        stabilityScore = (accelScore + gyroScore) / 2f;
-        
-        return accelStable && gyroStable;
-    }
-    
-    bool IsIdle()
-    {
-        if (IsSensorStable())
+        if (autoCalibrate && !isCalibrated)
         {
-            if (!isIdleState)
-            {
-                idleStart = Time.time;
-                isIdleState = true;
-            }
-            return (Time.time - idleStart > idleDuration);
-        }
-        else
-        {
-            isIdleState = false;
-            lastMovement = Time.time;
-            return false;
-        }
-    }
-    
-    #endregion
-    
-    #region Data Processing
-    
-    void ProcessPaddleData()
-    {
-        if (IsIdle())
-        {
-            CorrectDriftWithAccel();
-        }
-        else
-        {
-            UpdateAngle();
+            StartCoroutine(AutoCalibrationRoutine());
         }
         
         UpdatePaddleState();
-        
-        if (enableDebugLogs)
-            PrintDebugInfo();
     }
-    
-    void CorrectDriftWithAccel()
+
+    void OnBluetoothConnectionFailed(BluetoothHelper helper)
     {
-        Vector3 accel = bluetoothManager.GetScaledAccel();
+        isConnected = false;
+        DebugLog("✗ Connection failed");
+        UpdatePaddleState();
+    }
+
+    void OnBluetoothDataReceived(BluetoothHelper helper)
+    {
+        string data = helper.Read().Trim();
+        lastPacket = data;
+        packetsReceived++;
         
-        Vector3 accelDiff = accel - baselineAccel;
-        tiltAngleZ = Mathf.Atan2(accelDiff.x, accelDiff.y) * RAD_TO_DEG;
-        
-        driftCorrection = tiltAngleZ - zAngle;
-        zAngle = zAngle + (driftCorrection * correctionFactor);
-        
-        if (enableDebugLogs)
+        if (ParseBluetoothData(data))
         {
-            Debug.Log($"[PaddleController] 🔄 Drift corrected: {driftCorrection:F2}° → Z angle: {zAngle:F2}°");
+            validPackets++;
         }
     }
-    
-    void UpdateAngle()
+
+    bool ParseBluetoothData(string data)
     {
-        Vector3 gyro = bluetoothManager.GetGyroAngles();
-        float currentTime = Time.time;
-        float dt = currentTime - lastTime;
-        
-        correctedGyroZ = gyro.z - baselineGyroZ;
-        
-        zAngle += correctedGyroZ * dt;
-        
-        if (zAngle > 180f) zAngle -= 360f;
-        if (zAngle < -180f) zAngle += 360f;
-        
-        lastTime = currentTime;
+        try
+        {
+            if (data.StartsWith("G:") && data.Contains(",A:"))
+            {
+                string[] parts = data.Split(',');
+                if (parts.Length >= 1)
+                {
+                    string gyroStr = parts[0].Substring(2);
+                    if (float.TryParse(gyroStr, out float gyro))
+                    {
+                        currentAngle = gyro;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
-    
+    #endregion
+
+    #region Data Processing
+    void ProcessPaddleData()
+    {
+        if (!isConnected) return;
+
+        // Store previous values
+        previousAngle = smoothedAngle;
+        
+        // Apply smoothing
+        if (enableSmoothing)
+        {
+            smoothedAngle = Mathf.Lerp(smoothedAngle, currentAngle, angleSmoothingFactor);
+        }
+        else
+        {
+            smoothedAngle = currentAngle;
+        }
+
+        // Calculate velocity
+        if (Time.deltaTime > 0)
+        {
+            float rawVelocity = (smoothedAngle - previousAngle) / Time.deltaTime;
+            angleVelocity = enableSmoothing ? 
+                Mathf.Lerp(angleVelocity, rawVelocity, velocitySmoothingFactor) : 
+                rawVelocity;
+        }
+
+        // Smooth velocity
+        smoothedVelocity = Mathf.Lerp(smoothedVelocity, angleVelocity, velocitySmoothingFactor);
+
+        // Record significant movements
+        if (Mathf.Abs(angleVelocity) > movementVelocityThreshold)
+        {
+            RecordSwingData();
+            lastSignificantMove = Time.time;
+        }
+
+        if (verboseLogging)
+        {
+            DebugLog($"Angle: {smoothedAngle:F1}°, Velocity: {angleVelocity:F1}°/s");
+        }
+    }
+
+    void RecordSwingData()
+    {
+        SwingData swing = new SwingData
+        {
+            timestamp = Time.time,
+            angle = smoothedAngle,
+            velocity = angleVelocity,
+            isLeftSwing = angleVelocity > 0
+        };
+        
+        swingHistory.Add(swing);
+    }
+
+    void CleanupSwingHistory()
+    {
+        float currentTime = Time.time;
+        swingHistory.RemoveAll(s => currentTime - s.timestamp > alternatingTimeWindow);
+    }
+    #endregion
+
+    #region State Management
     void UpdatePaddleState()
     {
-        finalZAngle = Mathf.Clamp(zAngle, -maxTiltOutput, maxTiltOutput);
+        PaddleState newState = DetermineCurrentState();
         
-        PaddleState newState = PaddleState.Neutral;
-        int newDirection = 0;
-        float newIntensity = 0f;
-        
-        if (finalZAngle > tiltThreshold)
+        // Apply state change delay
+        if (newState != currentState && Time.time - lastStateChangeTime < stateChangeDelay)
         {
-            newState = PaddleState.TiltRight;
-            newDirection = 1;
-            newIntensity = Mathf.Min(1f, Mathf.Abs(finalZAngle) / maxTiltOutput);
+            return;
         }
-        else if (finalZAngle < -tiltThreshold)
+
+        if (newState != currentState)
         {
-            newState = PaddleState.TiltLeft;
-            newDirection = -1;
-            newIntensity = Mathf.Min(1f, Mathf.Abs(finalZAngle) / maxTiltOutput);
-        }
-        
-        if (paddleState != newState)
-        {
-            paddleState = newState;
-            OnPaddleStateChanged?.Invoke(paddleState);
-        }
-        
-        if (paddleDirection != newDirection)
-        {
-            paddleDirection = newDirection;
-            OnTiltDetected?.Invoke(paddleDirection, newIntensity);
-        }
-        
-        tiltIntensity = newIntensity;
-        
-        OnZAngleChanged?.Invoke(finalZAngle);
-    }
-    
-    #endregion
-    
-    #region Debug
-    
-    void PrintDebugInfo()
-    {
-        if (Time.time % 0.5f < Time.deltaTime)
-        {
-            Vector3 rawAccel = bluetoothManager.GetScaledAccel();
-            Vector3 rawGyro = bluetoothManager.GetGyroAngles();
+            previousState = currentState;
+            currentState = newState;
+            lastStateChangeTime = Time.time;
+            stateConfidence = CalculateStateConfidence();
             
-            Debug.Log("═══════════════════════════════════════");
-            Debug.Log($"[PaddleController] 📊 Raw Data - Accel: {rawAccel} | Gyro Z: {correctedGyroZ:F2}");
-            Debug.Log($"[PaddleController] 📐 Angles - Raw Z: {zAngle:F2}° | Final Z: {finalZAngle:F2}° | Tilt: {tiltAngleZ:F2}°");
-            Debug.Log($"[PaddleController] 🎯 State: {paddleState} | Direction: {paddleDirection} | Intensity: {tiltIntensity:F2}");
-            Debug.Log($"[PaddleController] 🔧 Status - Idle: {(isIdleState ? "YES" : "NO")} | Stability: {stabilityScore:F2} | Magnitude: {accelMagnitude:F2}");
+            if (showStateDebug)
+            {
+                DebugLog($"State: {previousState} → {currentState} (confidence: {stateConfidence:F2})");
+            }
+            
+            OnStateChanged?.Invoke(currentState);
+            
+            // Trigger specific actions
+            HandleStateActions();
         }
     }
-    
-    #endregion
-    
-    #region Public API
-    
-    public float GetZAngle() => finalZAngle;
-    public int GetPaddleDirection() => paddleDirection;
-    public float GetTiltIntensity() => tiltIntensity;
-    public PaddleState GetPaddleState() => paddleState;
-    public bool IsReady() => isCalibrated && bluetoothManager.IsConnected();
-    public bool IsCalibrating() => isCalibrating || isMultiPointCalibrating;
-    public int GetCalibrationProgress() => calibrationProgress;
-    public float GetStabilityScore() => stabilityScore;
-    
-    public void SetTiltThreshold(float threshold) => tiltThreshold = threshold;
-    public void SetCorrectionFactor(float factor) => correctionFactor = Mathf.Clamp(factor, 0.1f, 0.5f);
-    public void SetIdleDuration(float duration) => idleDuration = duration;
-    public void SetMaxTiltOutput(float max) => maxTiltOutput = max;
-    
-    #endregion
-    
-    #region Unity Inspector Buttons
-    
-    [ContextMenu("Start Single Point Calibration")]
-    public void StartSinglePointCalibrationFromMenu()
+
+    PaddleState DetermineCurrentState()
     {
-        useMultiPoint = false;
-        StartCalibration();
-    }
-    
-    [ContextMenu("Start Multi Point Calibration")]
-    public void StartMultiPointCalibrationFromMenu()
-    {
-        useMultiPoint = true;
-        StartCalibration();
-    }
-    
-    [ContextMenu("Reset Configuration")]
-    public void ResetConfiguration()
-    {
-        tiltThreshold = 15.0f;
-        maxTiltOutput = 45.0f;
-        stabilityThreshold = 0.5f;
-        gyroNoiseThreshold = 5.0f;
-        idleDuration = 2.0f;
-        correctionFactor = 0.2f;
+        if (!isConnected) return PaddleState.Disconnected;
+        if (isCalibrating) return PaddleState.Calibrating;
+        if (!isCalibrated) return PaddleState.Idle;
+
+        // Check for forward swing pattern
+        if (enablePatternDetection && IsAlternatingPattern())
+        {
+            return PaddleState.SwingForward;
+        }
+
+        // Check for tilts relative to neutral
+        float angleFromNeutral = smoothedAngle - neutralAngle;
         
-        Debug.Log("[PaddleController] Configuration reset to defaults");
+        if (Mathf.Abs(angleFromNeutral) < deadZone)
+        {
+            return PaddleState.Idle;
+        }
+
+        // Check tilt thresholds - FIXED: use relative to neutral
+        if (angleFromNeutral < (leftAngle - neutralAngle) * 0.7f) // 70% of full left range
+        {
+            return PaddleState.TiltLeft;
+        }
+        else if (angleFromNeutral > (rightAngle - neutralAngle) * 0.7f) // 70% of full right range
+        {
+            return PaddleState.TiltRight;
+        }
+
+        return PaddleState.Idle;
     }
-    
+
+    bool IsAlternatingPattern()
+    {
+        if (swingHistory.Count < minSwingsForForward) return false;
+
+        // Check if recent swings alternate direction
+        bool hasAlternating = false;
+        for (int i = 1; i < swingHistory.Count; i++)
+        {
+            if (swingHistory[i].isLeftSwing != swingHistory[i-1].isLeftSwing)
+            {
+                hasAlternating = true;
+                break;
+            }
+        }
+
+        return hasAlternating && Mathf.Abs(smoothedVelocity) > forwardSwingThreshold;
+    }
+
+    float CalculateStateConfidence()
+    {
+        switch (currentState)
+        {
+            case PaddleState.TiltLeft:
+            case PaddleState.TiltRight:
+                float angleFromNeutral = Mathf.Abs(smoothedAngle - neutralAngle);
+                return Mathf.Clamp01(angleFromNeutral / 45f);
+                
+            case PaddleState.SwingForward:
+                return Mathf.Clamp01(Mathf.Abs(smoothedVelocity) / forwardSwingThreshold);
+                
+            case PaddleState.Idle:
+                return 1f - Mathf.Clamp01(Mathf.Abs(angleVelocity) / movementVelocityThreshold);
+                
+            default:
+                return 1f;
+        }
+    }
+
+    void HandleStateActions()
+    {
+        switch (currentState)
+        {
+            case PaddleState.TiltLeft:
+                OnTiltDetected?.Invoke(-1, stateConfidence);
+                break;
+                
+            case PaddleState.TiltRight:
+                OnTiltDetected?.Invoke(1, stateConfidence);
+                break;
+                
+            case PaddleState.SwingForward:
+                OnForwardSwing?.Invoke(smoothedVelocity);
+                break;
+        }
+    }
     #endregion
+
+    #region Fixed 3-Phase Calibration
+    IEnumerator AutoCalibrationRoutine()
+    {
+        yield return new WaitForSeconds(autoCalibrationDelay);
+        
+        if (useMultiPointCalibration)
+        {
+            StartThreePhaseCalibration();
+        }
+        else
+        {
+            StartSinglePhaseCalibration();
+        }
+    }
+
+    public void StartThreePhaseCalibration()
+    {
+        if (isCalibrating) return;
+        
+        DebugLog("Starting 3-phase calibration: Neutral → Right → Left");
+        StartCoroutine(ThreePhaseCalibrationRoutine());
+    }
+
+    public void StartSinglePhaseCalibration()
+    {
+        if (isCalibrating) return;
+        
+        DebugLog("Starting single-phase calibration (legacy)");
+        StartCoroutine(SinglePhaseCalibrationRoutine());
+    }
+
+    IEnumerator ThreePhaseCalibrationRoutine()
+    {
+        isCalibrating = true;
+        
+        // Clear all calibration data
+        neutralSamples.Clear();
+        leftSamples.Clear();
+        rightSamples.Clear();
+        
+        // Phase 0: Neutral
+        currentCalibrationPhase = 0;
+        yield return StartCoroutine(CollectCalibrationPhase(neutralSamples, "Hold paddle FLAT/NEUTRAL"));
+        
+        // Phase 1: Right
+        currentCalibrationPhase = 1;
+        yield return StartCoroutine(CollectCalibrationPhase(rightSamples, "Tilt paddle to RIGHT"));
+        
+        // Phase 2: Left
+        currentCalibrationPhase = 2;
+        yield return StartCoroutine(CollectCalibrationPhase(leftSamples, "Tilt paddle to LEFT"));
+        
+        FinishThreePhaseCalibration();
+    }
+
+    IEnumerator CollectCalibrationPhase(List<float> sampleList, string instruction)
+    {
+        if (showCalibrationDebug)
+        {
+            DebugLog($"Phase {currentCalibrationPhase}: {instruction}");
+        }
+        
+        float startTime = Time.time;
+        float sampleInterval = calibrationHoldTime / calibrationSamples;
+        
+        while (sampleList.Count < calibrationSamples && 
+               Time.time - startTime < calibrationHoldTime * 2)
+        {
+            if (Mathf.Abs(angleVelocity) < calibrationStabilityThreshold)
+            {
+                sampleList.Add(currentAngle);
+                if (showCalibrationDebug)
+                {
+                    DebugLog($"Phase {currentCalibrationPhase} sample {sampleList.Count}: {currentAngle:F1}°");
+                }
+            }
+            
+            yield return new WaitForSeconds(sampleInterval);
+        }
+        
+        if (showCalibrationDebug)
+        {
+            DebugLog($"Phase {currentCalibrationPhase} complete: {sampleList.Count} samples collected");
+        }
+    }
+
+    void FinishThreePhaseCalibration()
+    {
+        isCalibrating = false;
+        
+        // Validate sample counts
+        if (neutralSamples.Count < calibrationSamples / 2 ||
+            leftSamples.Count < calibrationSamples / 2 ||
+            rightSamples.Count < calibrationSamples / 2)
+        {
+            DebugLog("❌ 3-phase calibration failed - insufficient samples");
+            OnCalibrationComplete?.Invoke(false);
+            return;
+        }
+        
+        // Calculate averages for each phase - FIXED LOGIC
+        neutralAngle = CalculateAverage(neutralSamples);
+        rightAngle = CalculateAverage(rightSamples);
+        leftAngle = CalculateAverage(leftSamples);
+        
+        isCalibrated = true;
+        
+        DebugLog($"✅ 3-phase calibration complete!");
+        DebugLog($"Neutral: {neutralAngle:F1}°, Left: {leftAngle:F1}°, Right: {rightAngle:F1}°");
+        DebugLog($"Samples: Neutral={neutralSamples.Count}, Left={leftSamples.Count}, Right={rightSamples.Count}");
+        
+        OnCalibrationComplete?.Invoke(true);
+    }
+
+    IEnumerator SinglePhaseCalibrationRoutine()
+    {
+        isCalibrating = true;
+        List<float> allSamples = new List<float>();
+        
+        float startTime = Time.time;
+        float sampleInterval = calibrationHoldTime / calibrationSamples;
+        
+        while (allSamples.Count < calibrationSamples && 
+               Time.time - startTime < calibrationHoldTime * 2)
+        {
+            if (Mathf.Abs(angleVelocity) < calibrationStabilityThreshold)
+            {
+                allSamples.Add(currentAngle);
+            }
+            
+            yield return new WaitForSeconds(sampleInterval);
+        }
+        
+        FinishSinglePhaseCalibration(allSamples);
+    }
+
+    void FinishSinglePhaseCalibration(List<float> samples)
+    {
+        isCalibrating = false;
+        
+        if (samples.Count < calibrationSamples / 2)
+        {
+            DebugLog("❌ Single-phase calibration failed");
+            OnCalibrationComplete?.Invoke(false);
+            return;
+        }
+        
+        // Legacy logic for single-phase
+        float minAngle = float.MaxValue;
+        float maxAngle = float.MinValue;
+        
+        foreach (float angle in samples)
+        {
+            if (angle < minAngle) minAngle = angle;
+            if (angle > maxAngle) maxAngle = angle;
+        }
+        
+        leftAngle = minAngle;
+        rightAngle = maxAngle;
+        neutralAngle = (minAngle + maxAngle) / 2f;
+        
+        isCalibrated = true;
+        
+        DebugLog($"✅ Single-phase calibration complete!");
+        DebugLog($"Left: {leftAngle:F1}°, Right: {rightAngle:F1}°, Neutral: {neutralAngle:F1}°");
+        
+        OnCalibrationComplete?.Invoke(true);
+    }
+
+    float CalculateAverage(List<float> samples)
+    {
+        if (samples.Count == 0) return 0f;
+        
+        float sum = 0f;
+        foreach (float sample in samples)
+        {
+            sum += sample;
+        }
+        return sum / samples.Count;
+    }
+
+    public void ResetCalibration()
+    {
+        isCalibrated = false;
+        isCalibrating = false;
+        neutralSamples.Clear();
+        leftSamples.Clear();
+        rightSamples.Clear();
+        currentCalibrationPhase = 0;
+        DebugLog("Calibration reset");
+    }
+    #endregion
+
+    #region Public API
+    public bool IsConnected() => isConnected;
+    public bool IsCalibrated() => isCalibrated;
+    public bool IsCalibrating() => isCalibrating;
+    public PaddleState GetCurrentState() => currentState;
+    public float GetCurrentAngle() => smoothedAngle;
+    public float GetAngleVelocity() => smoothedVelocity;
+    public float GetStateConfidence() => stateConfidence;
+    public string GetLastPacket() => lastPacket;
+    public float GetValidPacketRatio() => packetsReceived > 0 ? (float)validPackets / packetsReceived : 0f;
+    public int GetCurrentCalibrationPhase() => currentCalibrationPhase;
+    public string GetCalibrationPhaseNames() => currentCalibrationPhase < calibrationPhaseNames.Length ? calibrationPhaseNames[currentCalibrationPhase] : "Unknown";
     
+    [ContextMenu("Start 3-Phase Calibration")]
+    public void ManualThreePhaseCalibration() => StartThreePhaseCalibration();
+    
+    [ContextMenu("Start Single-Phase Calibration")]
+    public void ManualSinglePhaseCalibration() => StartSinglePhaseCalibration();
+    
+    [ContextMenu("Reset Calibration")]
+    public void ManualResetCalibration() => ResetCalibration();
+    
+    [ContextMenu("Connect Bluetooth")]
+    public void ManualConnect() => ConnectToBluetooth();
+    #endregion
+
+    #region Debug
+    void DebugLog(string message)
+    {
+        if (enableDebugLogs)
+        {
+            Debug.Log($"[PaddleController] {message}");
+        }
+    }
+
+    void OnGUI()
+    {
+        if (!showAngleDebug) return;
+        
+        GUILayout.BeginArea(new Rect(10, 10, 400, 250));
+        GUILayout.Box("Paddle Controller Debug - Fixed 3-Phase");
+        
+        // Connection status
+        GUI.color = isConnected ? Color.green : Color.red;
+        GUILayout.Label($"Status: {(isConnected ? "Connected" : "Disconnected")}");
+        GUI.color = Color.white;
+        
+        // Calibration status
+        if (isCalibrating)
+        {
+            GUI.color = Color.yellow;
+            string phaseName = currentCalibrationPhase < calibrationPhaseNames.Length ? 
+                calibrationPhaseNames[currentCalibrationPhase] : "Unknown";
+            GUILayout.Label($"Calibrating Phase {currentCalibrationPhase}: {phaseName}");
+            
+            // Show sample counts per phase
+            GUILayout.Label($"Samples: N={neutralSamples.Count} R={rightSamples.Count} L={leftSamples.Count}");
+        }
+        else if (isCalibrated)
+        {
+            GUI.color = Color.green;
+            GUILayout.Label($"✓ Calibrated ({(useMultiPointCalibration ? "3-Phase" : "Single")})");
+        }
+        else
+        {
+            GUI.color = Color.red;
+            GUILayout.Label("Not Calibrated");
+        }
+        GUI.color = Color.white;
+        
+        // Current data
+        GUILayout.Label($"Angle: {smoothedAngle:F1}° (Raw: {currentAngle:F1}°)");
+        GUILayout.Label($"Velocity: {smoothedVelocity:F1}°/s");
+        GUILayout.Label($"State: {currentState} ({stateConfidence:F2})");
+        
+        if (isCalibrated)
+        {
+            GUILayout.Label($"Calibrated Angles:");
+            GUILayout.Label($"  Neutral: {neutralAngle:F1}° (±{deadZone}°)");
+            GUILayout.Label($"  Left: {leftAngle:F1}°, Right: {rightAngle:F1}°");
+            
+            // Show relative position
+            float relativeToNeutral = smoothedAngle - neutralAngle;
+            GUILayout.Label($"Relative to Neutral: {relativeToNeutral:F1}°");
+        }
+        
+        // Packet info
+        float validRatio = GetValidPacketRatio() * 100f;
+        GUILayout.Label($"Packets: {validPackets}/{packetsReceived} ({validRatio:F1}%)");
+        
+        // Manual controls
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("3-Phase Cal")) ManualThreePhaseCalibration();
+        if (GUILayout.Button("Single Cal")) ManualSinglePhaseCalibration();
+        if (GUILayout.Button("Reset")) ManualResetCalibration();
+        GUILayout.EndHorizontal();
+        
+        GUILayout.EndArea();
+    }
+
     void OnDestroy()
     {
-        if (bluetoothManager != null)
+        if (bluetoothHelper != null)
         {
-            bluetoothManager.OnConnectionChanged -= OnBluetoothConnectionChanged;
+            bluetoothHelper.Disconnect();
         }
     }
+    #endregion
 }
