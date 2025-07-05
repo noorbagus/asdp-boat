@@ -26,7 +26,7 @@ public class BluetoothManager : MonoBehaviour
     
     [Header("Multiple Device Support")]
     [Tooltip("List of device names to try connecting to")]
-    public string[] deviceNames = { "ferizy-paddle", "ferizy-dayung", "bluetooth-paddle" };
+    public string[] deviceNames = { "ferizy-paddle", "ferizy-dayung", "ferizy-paddle-2", "ferizy-dayung-2" };
     
     // Bluetooth
     private BluetoothHelper bluetoothHelper;
